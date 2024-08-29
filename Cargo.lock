@@ -2513,6 +2513,7 @@ dependencies = [
  "num_cpus",
  "pprof",
  "progressing",
+ "prometheus",
  "rand",
  "regex",
  "reqwest",
