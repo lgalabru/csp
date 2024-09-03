@@ -15,8 +15,6 @@ use chainhook_sdk::{
 };
 use rusqlite::{Connection, ToSql, Transaction};
 
-use super::cache::Brc20MemoryCache;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Brc20DbTokenRow {
     pub inscription_id: String,

@@ -6,7 +6,7 @@ use crate::config::{Config, PredicatesApi};
 use crate::core::meta_protocols::brc20::brc20_activation_height;
 use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
 use crate::core::meta_protocols::brc20::db::{
-    brc20_new_rw_db_conn, open_readwrite_brc20_db_conn, write_augmented_block_to_brc20_db
+    brc20_new_rw_db_conn, open_readwrite_brc20_db_conn, write_augmented_block_to_brc20_db,
 };
 use crate::core::meta_protocols::brc20::parser::ParsedBrc20Operation;
 use crate::core::meta_protocols::brc20::verifier::{
@@ -60,13 +60,18 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 pub struct Service {
+    pub prometheus: PrometheusMonitoring,
     pub config: Config,
     pub ctx: Context,
 }
 
 impl Service {
     pub fn new(config: Config, ctx: Context) -> Self {
-        Self { config, ctx }
+        Self {
+            prometheus: PrometheusMonitoring::new(),
+            config,
+            ctx,
+        }
     }
 
     pub async fn run(
@@ -78,8 +83,6 @@ impl Service {
         check_blocks_integrity: bool,
         stream_indexing_to_observers: bool,
     ) -> Result<(), String> {
-        let prometheus = PrometheusMonitoring::new();
-
         let mut event_observer_config = self.config.get_event_observer_config();
         let block_post_processor = if stream_indexing_to_observers && !observer_specs.is_empty() {
             let mut chainhook_config: ChainhookConfig = ChainhookConfig::new();
@@ -327,6 +330,7 @@ impl Service {
         let mut brc20_cache = brc20_new_cache(&self.config);
         let ctx = self.ctx.clone();
         let config = self.config.clone();
+        let prometheus = self.prometheus.clone();
 
         let _ = hiro_system_kit::thread_named("Observer Sidecar Runloop").spawn(move || loop {
             select! {
@@ -337,6 +341,7 @@ impl Service {
                             &blocks_ids_to_rollback,
                             &cache_l2,
                             &mut brc20_cache,
+                            &prometheus,
                             &config,
                             &ctx,
                         );
@@ -465,6 +470,7 @@ impl Service {
                 &self.config,
                 &self.ctx,
                 block_post_processor.clone(),
+                &self.prometheus,
             );
 
             try_info!(
@@ -642,6 +648,7 @@ pub fn chainhook_sidecar_mutate_blocks(
     blocks_ids_to_rollback: &Vec<BlockIdentifier>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
     brc20_cache: &mut Brc20MemoryCache,
+    prometheus: &PrometheusMonitoring,
     config: &Config,
     ctx: &Context,
 ) {
@@ -730,6 +737,7 @@ pub fn chainhook_sidecar_mutate_blocks(
                 &inscriptions_db_tx,
                 brc20_db_tx.as_ref(),
                 brc20_cache,
+                prometheus,
                 &ordhook_config,
                 &ctx,
             );

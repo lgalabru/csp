@@ -37,15 +37,16 @@ use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;
 use ordhook::service::observers::initialize_observers_db;
 use ordhook::service::{start_observer_forwarding, Service};
 use ordhook::utils::bitcoind::bitcoind_get_block_height;
+use ordhook::utils::monitoring::PrometheusMonitoring;
 use ordhook::{hex, initialize_databases, try_error, try_info, try_warn};
 use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::{process, u64};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
+use std::{process, u64};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -883,8 +884,12 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                     _ => None,
                 };
                 let blocks = cmd.get_blocks();
-                let inscription_indexing_processor =
-                    start_inscription_indexing_processor(&config, ctx, block_post_processor);
+                let inscription_indexing_processor = start_inscription_indexing_processor(
+                    &config,
+                    ctx,
+                    block_post_processor,
+                    &PrometheusMonitoring::new(),
+                );
 
                 download_and_pipeline_blocks(
                     &config,

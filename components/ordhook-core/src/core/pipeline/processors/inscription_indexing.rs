@@ -58,12 +58,14 @@ pub fn start_inscription_indexing_processor(
     config: &Config,
     ctx: &Context,
     post_processor: Option<Sender<BitcoinBlockData>>,
+    prometheus: &PrometheusMonitoring,
 ) -> PostProcessorController {
     let (commands_tx, commands_rx) = crossbeam_channel::bounded::<PostProcessorCommand>(2);
     let (events_tx, events_rx) = crossbeam_channel::unbounded::<PostProcessorEvent>();
 
     let config = config.clone();
     let ctx = ctx.clone();
+    let prometheus = prometheus.clone();
     let handle: JoinHandle<()> = hiro_system_kit::thread_named("Inscription indexing runloop")
         .spawn(move || {
             let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
@@ -140,6 +142,7 @@ pub fn start_inscription_indexing_processor(
                     &mut brc20_db_conn_rw,
                     &ordhook_config,
                     &post_processor,
+                    &prometheus,
                     &ctx,
                 );
 
@@ -333,7 +336,7 @@ pub fn process_block(
     }
 
     prometheus.metrics_block_indexed(block.block_identifier.index);
-    prometheus.metrics_inscription_indexed(inscription_number);
+    // prometheus.metrics_inscription_indexed(inscription_number);
 
     Ok(())
 }
