@@ -7,7 +7,7 @@ use chainhook_sdk::{
 use lru::LruCache;
 use rusqlite::{Connection, Transaction};
 
-use crate::core::meta_protocols::brc20::db::get_unsent_token_transfer;
+use crate::{config::Config, core::meta_protocols::brc20::db::get_unsent_token_transfer};
 
 use super::{
     db::{
@@ -16,6 +16,10 @@ use super::{
     },
     verifier::{VerifiedBrc20BalanceData, VerifiedBrc20TokenDeployData, VerifiedBrc20TransferData},
 };
+
+pub fn brc20_new_cache(config: &Config) -> Brc20MemoryCache {
+    Brc20MemoryCache::new(config.resources.brc20_lru_cache_size)
+}
 
 /// Keeps BRC20 DB rows before they're inserted into SQLite. Use `flush` to insert.
 pub struct Brc20DbCache {

@@ -4,9 +4,9 @@ mod runloops;
 
 use crate::config::{Config, PredicatesApi};
 use crate::core::meta_protocols::brc20::brc20_activation_height;
-use crate::core::meta_protocols::brc20::cache::Brc20MemoryCache;
+use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
 use crate::core::meta_protocols::brc20::db::{
-    open_readwrite_brc20_db_conn, write_augmented_block_to_brc20_db,
+    brc20_new_rw_db_conn, open_readwrite_brc20_db_conn, write_augmented_block_to_brc20_db
 };
 use crate::core::meta_protocols::brc20::parser::ParsedBrc20Operation;
 use crate::core::meta_protocols::brc20::verifier::{
@@ -36,6 +36,7 @@ use crate::service::observers::{
     update_observer_streaming_enabled, ObserverReport,
 };
 use crate::service::runloops::start_bitcoin_scan_runloop;
+use crate::utils::monitoring::PrometheusMonitoring;
 use crate::{try_debug, try_error, try_info};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
 use chainhook_sdk::chainhooks::types::{
@@ -81,8 +82,9 @@ impl Service {
         check_blocks_integrity: bool,
         stream_indexing_to_observers: bool,
     ) -> Result<(), String> {
-        let mut event_observer_config = self.config.get_event_observer_config();
+        let prometheus = PrometheusMonitoring::new();
 
+        let mut event_observer_config = self.config.get_event_observer_config();
         let block_post_processor = if stream_indexing_to_observers && !observer_specs.is_empty() {
             let mut chainhook_config: ChainhookConfig = ChainhookConfig::new();
             let specs = observer_specs.clone();
@@ -448,6 +450,7 @@ impl Service {
             bitcoin_chain_event_notifier: Some(chain_event_notifier_tx),
         };
         let cache_l2 = Arc::new(new_traversals_lazy_cache(100_000));
+        let mut brc20_cache = brc20_new_cache(&self.config);
         let ctx = self.ctx.clone();
         let config = self.config.clone();
 
@@ -459,6 +462,7 @@ impl Service {
                             &mut blocks_to_mutate,
                             &blocks_ids_to_rollback,
                             &cache_l2,
+                            &mut brc20_cache,
                             &config,
                             &ctx,
                         );
@@ -763,6 +767,7 @@ pub fn chainhook_sidecar_mutate_blocks(
     blocks_to_mutate: &mut Vec<BitcoinBlockDataCached>,
     blocks_ids_to_rollback: &Vec<BlockIdentifier>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
+    brc20_cache: &mut Brc20MemoryCache,
     config: &Config,
     ctx: &Context,
 ) {
@@ -780,19 +785,7 @@ pub fn chainhook_sidecar_mutate_blocks(
             return;
         }
     };
-    let mut brc_20_db_conn_rw = if config.meta_protocols.brc20 {
-        match open_readwrite_brc20_db_conn(&config.expected_cache_path(), ctx) {
-            Ok(db) => Some(db),
-            Err(e) => {
-                try_error!(ctx, "Unable to open readwrite brc20 connection: {e}");
-                return;
-            }
-        }
-    } else {
-        None
-    };
-
-    let mut brc20_cache = Brc20MemoryCache::new(config.resources.brc20_lru_cache_size);
+    let mut brc_20_db_conn_rw = brc20_new_rw_db_conn(config, ctx);
 
     for block_id_to_rollback in blocks_ids_to_rollback.iter() {
         if let Err(e) = delete_data_in_ordhook_db(
@@ -862,7 +855,7 @@ pub fn chainhook_sidecar_mutate_blocks(
                 &cache_l2,
                 &inscriptions_db_tx,
                 brc20_db_tx.as_ref(),
-                &mut brc20_cache,
+                brc20_cache,
                 &ordhook_config,
                 &ctx,
             );
