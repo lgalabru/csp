@@ -148,21 +148,12 @@ pub fn initialize_brc20_db(base_dir: Option<&PathBuf>, ctx: &Context) -> Connect
     conn
 }
 
-pub fn open_readwrite_brc20_db_conn(
+fn open_readwrite_brc20_db_conn(
     base_dir: &PathBuf,
     ctx: &Context,
 ) -> Result<Connection, String> {
     let db_path = get_default_brc20_db_file_path(&base_dir);
     let conn = create_or_open_readwrite_db(Some(&db_path), ctx);
-    Ok(conn)
-}
-
-pub fn open_readonly_brc20_db_conn(
-    base_dir: &PathBuf,
-    ctx: &Context,
-) -> Result<Connection, String> {
-    let db_path = get_default_brc20_db_file_path(&base_dir);
-    let conn = open_existing_readonly_db(&db_path, ctx);
     Ok(conn)
 }
 

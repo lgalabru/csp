@@ -17,7 +17,7 @@ use ordhook::chainhook_sdk::utils::BlockHeights;
 use ordhook::chainhook_sdk::utils::Context;
 use ordhook::config::Config;
 use ordhook::core::meta_protocols::brc20::db::{
-    get_brc20_operations_on_block, open_readwrite_brc20_db_conn,
+    brc20_new_rw_db_conn, get_brc20_operations_on_block, open_readwrite_brc20_db_conn
 };
 use ordhook::core::new_traversals_lazy_cache;
 use ordhook::core::pipeline::download_and_pipeline_blocks;
@@ -954,14 +954,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 config.resources.memory_available,
                 &ctx,
             )?;
-            let brc_20_db_conn_rw = if config.meta_protocols.brc20 {
-                Some(open_readwrite_brc20_db_conn(
-                    &config.expected_cache_path(),
-                    ctx,
-                )?)
-            } else {
-                None
-            };
+            let brc_20_db_conn_rw = brc20_new_rw_db_conn(&config, ctx);
 
             delete_data_in_ordhook_db(
                 cmd.start_block,
