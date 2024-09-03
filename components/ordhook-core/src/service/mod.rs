@@ -206,6 +206,7 @@ impl Service {
         Ok((observer_command_tx, observer_event_rx))
     }
 
+    // TODO: Deprecated? Only used by ordhook-sdk-js.
     pub fn start_main_runloop(
         &self,
         _observer_command_tx: &std::sync::mpsc::Sender<ObserverCommand>,
@@ -242,6 +243,8 @@ impl Service {
         Ok(())
     }
 
+    /// Starts the predicates HTTP server and the main Bitcoin processing runloop that will wait for ZMQ messages to arrive in
+    /// order to index blocks. This function will block the main thread indefinitely.
     pub fn start_main_runloop_with_dynamic_predicates(
         &self,
         observer_command_tx: &std::sync::mpsc::Sender<ObserverCommand>,
@@ -269,15 +272,34 @@ impl Service {
             let moved_config = self.config.clone();
             let moved_ctx = self.ctx.clone();
             let moved_observer_commands_tx = observer_command_tx.clone();
+            let moved_observer_event_rx = observer_event_rx.clone();
             let _ = hiro_system_kit::thread_named("HTTP Observers API").spawn(move || {
                 let _ = hiro_system_kit::nestable_block_on(start_observers_http_server(
                     &moved_config,
                     &moved_observer_commands_tx,
-                    observer_event_rx,
+                    moved_observer_event_rx,
                     bitcoin_scan_op_tx,
                     &moved_ctx,
                 ));
             });
+        }
+
+        // Block the main thread indefinitely until the chainhook-sdk channel is closed.
+        loop {
+            let event = match observer_event_rx.recv() {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    try_error!(self.ctx, "Error: broken channel {}", e.to_string());
+                    break;
+                }
+            };
+            match event {
+                ObserverEvent::Terminate => {
+                    try_info!(&self.ctx, "Terminating runloop");
+                    break;
+                }
+                _ => {}
+            }
         }
 
         Ok(())

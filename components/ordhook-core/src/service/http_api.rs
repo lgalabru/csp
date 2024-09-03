@@ -41,8 +41,6 @@ pub async fn start_observers_http_server(
     bitcoin_scan_op_tx: crossbeam_channel::Sender<BitcoinChainhookSpecification>,
     ctx: &Context,
 ) -> Result<Shutdown, String> {
-    try_info!(ctx, "Starting observers HTTP server");
-
     // Build and start HTTP server.
     let ignite = build_server(config, observer_commands_tx, ctx).await;
     let shutdown = ignite.shutdown();
@@ -56,10 +54,7 @@ pub async fn start_observers_http_server(
     let _ = hiro_system_kit::thread_named("observers_api-events").spawn(move || loop {
         let event = match observer_event_rx.recv() {
             Ok(cmd) => cmd,
-            Err(e) => {
-                try_error!(&moved_ctx, "Error: broken channel {}", e.to_string());
-                break;
-            }
+            Err(_) => break
         };
         match event {
             ObserverEvent::PredicateRegistered(spec) => {
@@ -138,10 +133,6 @@ pub async fn start_observers_http_server(
                     )
                 }
             }
-            ObserverEvent::Terminate => {
-                try_info!(&moved_ctx, "Terminating runloop");
-                break;
-            }
             _ => {}
         }
     });
@@ -157,6 +148,7 @@ async fn build_server(
     let PredicatesApi::On(ref api_config) = config.http_api else {
         unreachable!();
     };
+    try_info!(ctx, "Listening on port {} for chainhook predicate registrations", api_config.http_port);
     let moved_config = config.clone();
     let moved_ctx = ctx.clone();
     let moved_observer_commands_tx = observer_command_tx.clone();
