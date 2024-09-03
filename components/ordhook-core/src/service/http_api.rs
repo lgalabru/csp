@@ -41,6 +41,8 @@ pub async fn start_observers_http_server(
     bitcoin_scan_op_tx: crossbeam_channel::Sender<BitcoinChainhookSpecification>,
     ctx: &Context,
 ) -> Result<Shutdown, String> {
+    try_info!(ctx, "Starting observers HTTP server");
+
     // Build and start HTTP server.
     let ignite = build_server(config, observer_commands_tx, ctx).await;
     let shutdown = ignite.shutdown();
