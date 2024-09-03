@@ -19,7 +19,10 @@ use std::hash::BuildHasherDefault;
 
 use crate::{
     core::{
-        meta_protocols::brc20::{cache::Brc20MemoryCache, db::open_readwrite_brc20_db_conn},
+        meta_protocols::brc20::{
+            cache::{brc20_new_cache, Brc20MemoryCache},
+            db::brc20_new_rw_db_conn,
+        },
         pipeline::processors::block_archiving::store_compacted_blocks,
         protocol::{
             inscription_parsing::{
@@ -79,6 +82,9 @@ pub fn start_inscription_indexing_processor(
                 open_readonly_ordhook_db_conn(&config.expected_cache_path(), &ctx).unwrap();
             let mut sequence_cursor = SequenceCursor::new(&inscriptions_db_conn);
 
+            let mut brc20_cache = brc20_new_cache(&config);
+            let mut brc20_db_conn_rw = brc20_new_rw_db_conn(&config, &ctx);
+
             loop {
                 let (compacted_blocks, mut blocks) = match commands_rx.try_recv() {
                     Ok(PostProcessorCommand::ProcessBlocks(compacted_blocks, blocks)) => {
@@ -133,6 +139,8 @@ pub fn start_inscription_indexing_processor(
                     &mut sequence_cursor,
                     &cache_l2,
                     &mut inscriptions_db_conn_rw,
+                    &mut brc20_cache,
+                    &mut brc20_db_conn_rw,
                     &ordhook_config,
                     &post_processor,
                     &ctx,
@@ -169,6 +177,8 @@ pub fn process_blocks(
     sequence_cursor: &mut SequenceCursor,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
     inscriptions_db_conn_rw: &mut Connection,
+    brc20_cache: &mut Brc20MemoryCache,
+    brc20_db_conn_rw: &mut Option<Connection>,
     ordhook_config: &OrdhookConfig,
     post_processor: &Option<Sender<BitcoinBlockData>>,
     ctx: &Context,
@@ -177,18 +187,9 @@ pub fn process_blocks(
 
     let mut updated_blocks = vec![];
 
-    let mut brc20_db_conn_rw = match open_readwrite_brc20_db_conn(&ordhook_config.db_path, &ctx) {
-        Ok(dbs) => dbs,
-        Err(e) => {
-            panic!("Unable to open readwrite connection: {e}");
-        }
-    };
-    let mut brc20_cache = Brc20MemoryCache::new(ordhook_config.resources.brc20_lru_cache_size);
-
     for _cursor in 0..next_blocks.len() {
-        let inscriptions_db_tx: rusqlite::Transaction<'_> =
-            inscriptions_db_conn_rw.transaction().unwrap();
-        let brc20_db_tx = brc20_db_conn_rw.transaction().unwrap();
+        let inscriptions_db_tx = inscriptions_db_conn_rw.transaction().unwrap();
+        let brc20_db_tx = brc20_db_conn_rw.as_mut().map(|c| c.transaction().unwrap());
 
         let mut block = next_blocks.remove(0);
 
@@ -214,8 +215,8 @@ pub fn process_blocks(
             &mut cache_l1,
             cache_l2,
             &inscriptions_db_tx,
-            Some(&brc20_db_tx),
-            &mut brc20_cache,
+            brc20_db_tx.as_ref(),
+            brc20_cache,
             ordhook_config,
             ctx,
         );
@@ -242,21 +243,20 @@ pub fn process_blocks(
                 block.block_identifier.index,
             );
             let _ = inscriptions_db_tx.rollback();
-            let _ = brc20_db_tx.rollback();
+            let _ = brc20_db_tx.map(|t| t.rollback());
         } else {
             match inscriptions_db_tx.commit() {
-                Ok(_) => match brc20_db_tx.commit() {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // delete_data_in_ordhook_db(
-                        //     block.block_identifier.index,
-                        //     block.block_identifier.index,
-                        //     ordhook_config,
-                        //     ctx,
-                        // );
-                        todo!()
+                Ok(_) => {
+                    if let Some(brc20_db_tx) = brc20_db_tx {
+                        match brc20_db_tx.commit() {
+                            Ok(_) => {}
+                            Err(_) => {
+                                // TODO: Synchronize rollbacks and commits between BRC-20 and inscription DBs.
+                                todo!()
+                            }
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     try_error!(
                         ctx,

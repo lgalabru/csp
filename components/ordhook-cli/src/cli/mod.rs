@@ -42,7 +42,7 @@ use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::process;
+use std::{process, u64};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -729,8 +729,8 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let maintenance_enabled =
                     std::env::var("ORDHOOK_MAINTENANCE").unwrap_or("0".into());
                 if maintenance_enabled.eq("1") {
-                    info!(ctx.expect_logger(), "Entering maintenance mode (default duration = 7 days). Unset ORDHOOK_MAINTENANCE and reboot to resume operations");
-                    sleep(Duration::from_secs(3600 * 24 * 7))
+                    try_info!(ctx, "Entering maintenance mode. Unset ORDHOOK_MAINTENANCE and reboot to resume operations");
+                    sleep(Duration::from_secs(u64::MAX))
                 }
 
                 let config = ConfigFile::default(
@@ -745,7 +745,6 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let last_known_block =
                     find_latest_inscription_block_height(&db_connections.ordhook, ctx)?;
                 if last_known_block.is_none() {
-                    // Create rocksdb
                     open_ordhook_db_conn_rocks_db_loop(
                         true,
                         &config.expected_cache_path(),
@@ -756,12 +755,6 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 }
 
                 let ordhook_config = config.get_ordhook_config();
-                let version = env!("GIT_COMMIT");
-                info!(
-                    ctx.expect_logger(),
-                    "Starting service (git_commit = {})...", version
-                );
-
                 let start_block = match cmd.start_at_block {
                     Some(entry) => entry,
                     None => match last_known_block {

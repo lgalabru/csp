@@ -1,11 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
+    config::Config,
     db::{
         create_or_open_readwrite_db, open_existing_readonly_db, perform_query_one,
         perform_query_set,
     },
-    try_warn,
+    try_error, try_warn,
 };
 use chainhook_sdk::{
     types::{
@@ -42,6 +43,21 @@ pub struct Brc20DbLedgerRow {
     pub avail_balance: f64,
     pub trans_balance: f64,
     pub operation: String,
+}
+
+/// If the given `config` has BRC-20 enabled, returns a read/write DB connection for BRC-20.
+pub fn brc20_new_rw_db_conn(config: &Config, ctx: &Context) -> Option<Connection> {
+    if config.meta_protocols.brc20 {
+        match open_readwrite_brc20_db_conn(&config.expected_cache_path(), &ctx) {
+            Ok(db) => Some(db),
+            Err(e) => {
+                try_error!(ctx, "Unable to open readwrite brc20 connection: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    }
 }
 
 pub fn get_default_brc20_db_file_path(base_dir: &PathBuf) -> PathBuf {
