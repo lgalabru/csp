@@ -4,9 +4,9 @@ mod runloops;
 
 use crate::config::{Config, PredicatesApi};
 use crate::core::meta_protocols::brc20::brc20_activation_height;
-use crate::core::meta_protocols::brc20::cache::Brc20MemoryCache;
+use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
 use crate::core::meta_protocols::brc20::db::{
-    open_readwrite_brc20_db_conn, write_augmented_block_to_brc20_db,
+    brc20_new_rw_db_conn, open_readwrite_brc20_db_conn, write_augmented_block_to_brc20_db,
 };
 use crate::core::meta_protocols::brc20::parser::ParsedBrc20Operation;
 use crate::core::meta_protocols::brc20::verifier::{
@@ -97,8 +97,8 @@ impl Service {
         // Catch-up with chain tip
         self.catch_up_with_chain_tip(false, check_blocks_integrity, block_post_processor)
             .await?;
-        info!(
-            self.ctx.expect_logger(),
+        try_info!(
+            self.ctx,
             "Database up to date, service will start streaming blocks"
         );
 
@@ -322,6 +322,7 @@ impl Service {
             bitcoin_chain_event_notifier: Some(chain_event_notifier_tx),
         };
         let cache_l2 = Arc::new(new_traversals_lazy_cache(100_000));
+        let mut brc20_cache = brc20_new_cache(&self.config);
         let ctx = self.ctx.clone();
         let config = self.config.clone();
 
@@ -333,6 +334,7 @@ impl Service {
                             &mut blocks_to_mutate,
                             &blocks_ids_to_rollback,
                             &cache_l2,
+                            &mut brc20_cache,
                             &config,
                             &ctx,
                         );
@@ -637,6 +639,7 @@ pub fn chainhook_sidecar_mutate_blocks(
     blocks_to_mutate: &mut Vec<BitcoinBlockDataCached>,
     blocks_ids_to_rollback: &Vec<BlockIdentifier>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
+    brc20_cache: &mut Option<Brc20MemoryCache>,
     config: &Config,
     ctx: &Context,
 ) {
@@ -654,19 +657,7 @@ pub fn chainhook_sidecar_mutate_blocks(
             return;
         }
     };
-    let mut brc_20_db_conn_rw = if config.meta_protocols.brc20 {
-        match open_readwrite_brc20_db_conn(&config.expected_cache_path(), ctx) {
-            Ok(db) => Some(db),
-            Err(e) => {
-                try_error!(ctx, "Unable to open readwrite brc20 connection: {e}");
-                return;
-            }
-        }
-    } else {
-        None
-    };
-
-    let mut brc20_cache = Brc20MemoryCache::new(config.resources.brc20_lru_cache_size);
+    let mut brc20_db_conn_rw = brc20_new_rw_db_conn(config, ctx);
 
     for block_id_to_rollback in blocks_ids_to_rollback.iter() {
         if let Err(e) = delete_data_in_ordhook_db(
@@ -674,7 +665,7 @@ pub fn chainhook_sidecar_mutate_blocks(
             block_id_to_rollback.index,
             &inscriptions_db_conn_rw,
             &blocks_db_rw,
-            &brc_20_db_conn_rw,
+            &brc20_db_conn_rw,
             &ctx,
         ) {
             try_error!(
@@ -685,11 +676,7 @@ pub fn chainhook_sidecar_mutate_blocks(
         }
     }
 
-    let brc20_db_tx = if let Some(ref mut db_conn) = brc_20_db_conn_rw {
-        Some(db_conn.transaction().unwrap())
-    } else {
-        None
-    };
+    let brc20_db_tx = brc20_db_conn_rw.as_mut().map(|c| c.transaction().unwrap());
     let inscriptions_db_tx = inscriptions_db_conn_rw.transaction().unwrap();
 
     let ordhook_config = config.get_ordhook_config();
@@ -736,7 +723,7 @@ pub fn chainhook_sidecar_mutate_blocks(
                 &cache_l2,
                 &inscriptions_db_tx,
                 brc20_db_tx.as_ref(),
-                &mut brc20_cache,
+                brc20_cache.as_mut(),
                 &ordhook_config,
                 &ctx,
             );
@@ -766,6 +753,8 @@ pub fn chainhook_sidecar_mutate_blocks(
     }
 }
 
+/// Writes BRC-20 data already included in the augmented `BitcoinBlockData` onto the BRC-20 database. Only called if BRC-20 is
+/// enabled.
 pub fn write_brc20_block_operations(
     block: &mut BitcoinBlockData,
     brc20_operation_map: &mut HashMap<String, ParsedBrc20Operation>,
