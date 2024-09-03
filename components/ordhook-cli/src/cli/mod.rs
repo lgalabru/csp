@@ -17,7 +17,7 @@ use ordhook::chainhook_sdk::utils::BlockHeights;
 use ordhook::chainhook_sdk::utils::Context;
 use ordhook::config::Config;
 use ordhook::core::meta_protocols::brc20::db::{
-    brc20_new_rw_db_conn, get_brc20_operations_on_block, open_readwrite_brc20_db_conn
+    brc20_new_rw_db_conn, get_brc20_operations_on_block,
 };
 use ordhook::core::new_traversals_lazy_cache;
 use ordhook::core::pipeline::download_and_pipeline_blocks;
@@ -42,10 +42,10 @@ use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::{process, u64};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
+use std::{process, u64};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]

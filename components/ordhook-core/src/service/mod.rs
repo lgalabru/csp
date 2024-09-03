@@ -6,7 +6,7 @@ use crate::config::{Config, PredicatesApi};
 use crate::core::meta_protocols::brc20::brc20_activation_height;
 use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
 use crate::core::meta_protocols::brc20::db::{
-    brc20_new_rw_db_conn, open_readwrite_brc20_db_conn, write_augmented_block_to_brc20_db,
+    brc20_new_rw_db_conn, write_augmented_block_to_brc20_db,
 };
 use crate::core::meta_protocols::brc20::parser::ParsedBrc20Operation;
 use crate::core::meta_protocols::brc20::verifier::{
@@ -529,17 +529,7 @@ fn chainhook_sidecar_mutate_ordhook_db(command: HandleBlock, config: &Config, ct
             return;
         }
     };
-    let brc_20_db_conn_rw = if config.meta_protocols.brc20 {
-        match open_readwrite_brc20_db_conn(&config.expected_cache_path(), ctx) {
-            Ok(dbs) => Some(dbs),
-            Err(e) => {
-                try_error!(ctx, "Unable to open readwrite brc20 connection: {e}");
-                return;
-            }
-        }
-    } else {
-        None
-    };
+    let brc20_db_conn_rw = brc20_new_rw_db_conn(config, ctx);
 
     match command {
         HandleBlock::UndoBlock(block) => {
@@ -553,7 +543,7 @@ fn chainhook_sidecar_mutate_ordhook_db(command: HandleBlock, config: &Config, ct
                 block.block_identifier.index,
                 &inscriptions_db_conn_rw,
                 &blocks_db_rw,
-                &brc_20_db_conn_rw,
+                &brc20_db_conn_rw,
                 ctx,
             );
 
@@ -593,7 +583,7 @@ fn chainhook_sidecar_mutate_ordhook_db(command: HandleBlock, config: &Config, ct
 
             update_sequence_metadata_with_block(&block, &inscriptions_db_conn_rw, &ctx);
 
-            if let Some(brc20_conn_rw) = brc_20_db_conn_rw {
+            if let Some(brc20_conn_rw) = brc20_db_conn_rw {
                 write_augmented_block_to_brc20_db(&block, &brc20_conn_rw, ctx);
             }
         }

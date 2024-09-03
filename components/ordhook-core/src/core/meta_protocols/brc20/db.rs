@@ -2,10 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     config::Config,
-    db::{
-        create_or_open_readwrite_db, open_existing_readonly_db, perform_query_one,
-        perform_query_set,
-    },
+    db::{create_or_open_readwrite_db, perform_query_one, perform_query_set},
     try_error, try_warn,
 };
 use chainhook_sdk::{
@@ -148,10 +145,7 @@ pub fn initialize_brc20_db(base_dir: Option<&PathBuf>, ctx: &Context) -> Connect
     conn
 }
 
-fn open_readwrite_brc20_db_conn(
-    base_dir: &PathBuf,
-    ctx: &Context,
-) -> Result<Connection, String> {
+fn open_readwrite_brc20_db_conn(base_dir: &PathBuf, ctx: &Context) -> Result<Connection, String> {
     let db_path = get_default_brc20_db_file_path(&base_dir);
     let conn = create_or_open_readwrite_db(Some(&db_path), ctx);
     Ok(conn)
