@@ -31,7 +31,7 @@ use crate::db::{find_missing_blocks, run_compaction, update_sequence_metadata_wi
 use crate::scan::bitcoin::process_block_with_predicates;
 use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
 use crate::service::runloops::start_bitcoin_scan_runloop;
-use crate::utils::monitoring::PrometheusMonitoring;
+use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_debug, try_error, try_info};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
 use chainhook_sdk::chainhooks::types::{
@@ -83,6 +83,18 @@ impl Service {
         check_blocks_integrity: bool,
         stream_indexing_to_observers: bool,
     ) -> Result<(), String> {
+        if let Some(port) = self.config.network.prometheus_monitoring_port {
+            let registry_moved = self.prometheus.registry.clone();
+            let ctx_cloned = self.ctx.clone();
+            let _ = std::thread::spawn(move || {
+                let _ = hiro_system_kit::nestable_block_on(start_serving_prometheus_metrics(
+                    port,
+                    registry_moved,
+                    ctx_cloned,
+                ));
+            });
+        }
+
         let mut event_observer_config = self.config.get_event_observer_config();
         let block_post_processor = if stream_indexing_to_observers && !observer_specs.is_empty() {
             let mut chainhook_config: ChainhookConfig = ChainhookConfig::new();
