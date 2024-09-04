@@ -13,7 +13,7 @@ use crate::{
     service::observers::{
         open_readwrite_observers_db_conn_or_panic, update_observer_streaming_enabled,
     },
-    try_error,
+    try_error, try_info,
 };
 
 pub fn start_bitcoin_scan_runloop(
@@ -22,8 +22,8 @@ pub fn start_bitcoin_scan_runloop(
     observer_command_tx: Sender<ObserverCommand>,
     ctx: &Context,
 ) {
+    try_info!(ctx, "Starting bitcoin scan runloop");
     let bitcoin_scan_pool = ThreadPool::new(config.resources.expected_observers_count);
-
     while let Ok(predicate_spec) = bitcoin_scan_op_rx.recv() {
         let moved_ctx = ctx.clone();
         let moved_config = config.clone();

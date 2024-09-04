@@ -560,7 +560,7 @@ pub fn update_ordinals_db_with_block(
         let (tx, output_index, offset) =
             parse_satpoint_to_watch(&inscription_data.satpoint_post_inscription);
         let outpoint_to_watch = format_outpoint_to_watch(&tx, output_index);
-        let insertion_res = locations_to_insert.insert(
+        let _ = locations_to_insert.insert(
             (inscription_data.ordinal_number, outpoint_to_watch),
             OrdinalLocation {
                 offset,
@@ -568,21 +568,13 @@ pub fn update_ordinals_db_with_block(
                 tx_index: inscription_data.tx_index,
             },
         );
-        if let Some(prev_location) = insertion_res {
-            try_warn!(
-                ctx,
-                "Ignoring location insertion from inscriptions: {}, {:?}",
-                inscription_data.ordinal_number,
-                prev_location
-            );
-        }
     }
 
     for transfer_data in get_inscriptions_transferred_in_block(&block).iter() {
         let (tx, output_index, offset) =
             parse_satpoint_to_watch(&transfer_data.satpoint_post_transfer);
         let outpoint_to_watch = format_outpoint_to_watch(&tx, output_index);
-        let insertion_res = locations_to_insert.insert(
+        let _ = locations_to_insert.insert(
             (transfer_data.ordinal_number, outpoint_to_watch),
             OrdinalLocation {
                 offset,
@@ -590,14 +582,6 @@ pub fn update_ordinals_db_with_block(
                 tx_index: transfer_data.tx_index,
             },
         );
-        if let Some(prev_location) = insertion_res {
-            try_warn!(
-                ctx,
-                "Ignoring location insertion from transfers: {}, {:?}",
-                transfer_data.ordinal_number,
-                prev_location
-            );
-        }
     }
 
     for ((ordinal_number, outpoint_to_watch), location_data) in locations_to_insert {

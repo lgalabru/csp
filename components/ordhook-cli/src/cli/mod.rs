@@ -17,7 +17,7 @@ use ordhook::chainhook_sdk::utils::BlockHeights;
 use ordhook::chainhook_sdk::utils::Context;
 use ordhook::config::Config;
 use ordhook::core::meta_protocols::brc20::db::{
-    get_brc20_operations_on_block, open_readwrite_brc20_db_conn,
+    brc20_new_rw_db_conn, get_brc20_operations_on_block,
 };
 use ordhook::core::new_traversals_lazy_cache;
 use ordhook::core::pipeline::download_and_pipeline_blocks;
@@ -42,10 +42,10 @@ use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::process;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
+use std::{process, u64};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -729,8 +729,8 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let maintenance_enabled =
                     std::env::var("ORDHOOK_MAINTENANCE").unwrap_or("0".into());
                 if maintenance_enabled.eq("1") {
-                    info!(ctx.expect_logger(), "Entering maintenance mode (default duration = 7 days). Unset ORDHOOK_MAINTENANCE and reboot to resume operations");
-                    sleep(Duration::from_secs(3600 * 24 * 7))
+                    try_info!(ctx, "Entering maintenance mode. Unset ORDHOOK_MAINTENANCE and reboot to resume operations");
+                    sleep(Duration::from_secs(u64::MAX))
                 }
 
                 let config = ConfigFile::default(
@@ -745,7 +745,6 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let last_known_block =
                     find_latest_inscription_block_height(&db_connections.ordhook, ctx)?;
                 if last_known_block.is_none() {
-                    // Create rocksdb
                     open_ordhook_db_conn_rocks_db_loop(
                         true,
                         &config.expected_cache_path(),
@@ -756,12 +755,6 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 }
 
                 let ordhook_config = config.get_ordhook_config();
-                let version = env!("GIT_COMMIT");
-                info!(
-                    ctx.expect_logger(),
-                    "Starting service (git_commit = {})...", version
-                );
-
                 let start_block = match cmd.start_at_block {
                     Some(entry) => entry,
                     None => match last_known_block {
@@ -961,14 +954,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 config.resources.memory_available,
                 &ctx,
             )?;
-            let brc_20_db_conn_rw = if config.meta_protocols.brc20 {
-                Some(open_readwrite_brc20_db_conn(
-                    &config.expected_cache_path(),
-                    ctx,
-                )?)
-            } else {
-                None
-            };
+            let brc_20_db_conn_rw = brc20_new_rw_db_conn(&config, ctx);
 
             delete_data_in_ordhook_db(
                 cmd.start_block,
