@@ -23,7 +23,8 @@ use crate::core::protocol::inscription_parsing::{
 use crate::core::protocol::inscription_sequencing::SequenceCursor;
 use crate::core::{new_traversals_lazy_cache, should_sync_ordhook_db, should_sync_rocks_db};
 use crate::db::{
-    delete_data_in_ordhook_db, find_latest_inscription_block_height, insert_entry_in_blocks,
+    delete_data_in_ordhook_db, find_latest_inscription_block_height,
+    get_latest_indexed_inscription_number, insert_entry_in_blocks,
     open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn, open_readwrite_ordhook_dbs,
     update_ordinals_db_with_block, BlockBytesCursor, TransactionBytesCursor,
 };
@@ -83,6 +84,7 @@ impl Service {
         check_blocks_integrity: bool,
         stream_indexing_to_observers: bool,
     ) -> Result<(), String> {
+        // Start Prometheus monitoring server.
         if let Some(port) = self.config.network.prometheus_monitoring_port {
             let registry_moved = self.prometheus.registry.clone();
             let ctx_cloned = self.ctx.clone();
@@ -94,7 +96,16 @@ impl Service {
                 ));
             });
         }
+        let ordhook_db =
+            open_readonly_ordhook_db_conn(&self.config.expected_cache_path(), &self.ctx)
+                .expect("unable to retrieve ordhook db");
+        self.prometheus.initialize(
+            0,
+            get_latest_indexed_inscription_number(&ordhook_db, &self.ctx).unwrap_or(0),
+            find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap_or(0),
+        );
 
+        // Catch-up with chain tip.
         let mut event_observer_config = self.config.get_event_observer_config();
         let block_post_processor = if stream_indexing_to_observers && !observer_specs.is_empty() {
             let mut chainhook_config: ChainhookConfig = ChainhookConfig::new();
@@ -110,8 +121,6 @@ impl Service {
         } else {
             None
         };
-
-        // Catch-up with chain tip
         self.catch_up_with_chain_tip(false, check_blocks_integrity, block_post_processor)
             .await?;
         try_info!(
@@ -133,17 +142,12 @@ impl Service {
         };
 
         // Observers handling
-        let ordhook_db =
-            open_readonly_ordhook_db_conn(&self.config.expected_cache_path(), &self.ctx)
-                .expect("unable to retrieve ordhook db");
-        let chain_tip_height =
-            find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap();
         // 1) update event_observer_config with observers ready to be used
         // 2) catch-up outdated observers by dispatching replays
         let (chainhook_config, outdated_observers) =
             create_and_consolidate_chainhook_config_with_predicates(
                 observer_specs,
-                chain_tip_height,
+                find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap(),
                 predicate_activity_relayer.is_some(),
                 &self.config,
                 &self.ctx,

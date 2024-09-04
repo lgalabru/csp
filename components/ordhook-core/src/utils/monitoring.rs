@@ -61,16 +61,12 @@ impl PrometheusMonitoring {
     pub fn initialize(
         &self,
         total_predicates: u64,
-        max_inscription_number: Option<u64>,
-        initial_block: Option<u64>,
+        max_inscription_number: u64,
+        block_height: u64,
     ) {
         self.metrics_set_registered_predicates(total_predicates);
-        if let Some(initial_block) = initial_block {
-            self.metrics_block_indexed(initial_block);
-        }
-        if let Some(inscription_number) = max_inscription_number {
-            self.metrics_inscription_indexed(inscription_number);
-        }
+        self.metrics_block_indexed(block_height);
+        self.metrics_inscription_indexed(max_inscription_number);
     }
 
     pub fn metrics_deregister_predicate(&self) {
