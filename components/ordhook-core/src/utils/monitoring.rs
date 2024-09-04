@@ -157,3 +157,36 @@ pub async fn start_serving_prometheus_metrics(port: u16, registry: Registry, ctx
         try_warn!(ctx, "Prometheus monitoring: server error: {}", err);
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::utils::monitoring::PrometheusMonitoring;
+
+    #[test]
+    fn it_tracks_predicate_registration_deregistration_with_defaults() {
+        let prometheus = PrometheusMonitoring::new();
+        assert_eq!(prometheus.registered_predicates.get(), 0);
+        prometheus.metrics_set_registered_predicates(10);
+        assert_eq!(prometheus.registered_predicates.get(), 10);
+        prometheus.metrics_register_predicate();
+        assert_eq!(prometheus.registered_predicates.get(), 11);
+        prometheus.metrics_deregister_predicate();
+        assert_eq!(prometheus.registered_predicates.get(), 10);
+    }
+
+    #[test]
+    fn it_tracks_block_ingestion() {
+        let prometheus = PrometheusMonitoring::new();
+        assert_eq!(prometheus.last_indexed_block_height.get(), 0);
+        prometheus.metrics_block_indexed(100);
+        assert_eq!(prometheus.last_indexed_block_height.get(), 100);
+    }
+
+    #[test]
+    fn it_tracks_inscription_indexing() {
+        let prometheus = PrometheusMonitoring::new();
+        assert_eq!(prometheus.last_indexed_inscription_number.get(), 0);
+        prometheus.metrics_inscription_indexed(5000);
+        assert_eq!(prometheus.last_indexed_inscription_number.get(), 5000);
+    }
+}
