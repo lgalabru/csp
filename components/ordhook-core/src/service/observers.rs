@@ -24,7 +24,7 @@ use crate::{
         perform_query_set,
     },
     scan::bitcoin::process_block_with_predicates,
-    try_warn,
+    try_warn, utils::monitoring::PrometheusMonitoring,
 };
 
 pub fn update_observer_progress(
@@ -231,6 +231,7 @@ pub fn create_and_consolidate_chainhook_config_with_predicates(
     provided_observers: Vec<BitcoinChainhookSpecification>,
     chain_tip_height: u64,
     enable_internal_trigger: bool,
+    prometheus: &PrometheusMonitoring,
     config: &Config,
     ctx: &Context,
 ) -> Result<(ChainhookConfig, Vec<BitcoinChainhookFullSpecification>), String> {
@@ -333,6 +334,7 @@ pub fn create_and_consolidate_chainhook_config_with_predicates(
 
     let mut full_specs = vec![];
 
+    prometheus.metrics_set_registered_predicates(observers_to_catchup.len() as u64);
     for (observer, report) in observers_to_catchup.into_iter() {
         let mut networks = BTreeMap::new();
         networks.insert(

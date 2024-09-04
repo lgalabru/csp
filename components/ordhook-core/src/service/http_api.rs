@@ -22,12 +22,10 @@ use rocket::{
 use rocket::{response::status::Custom, State};
 
 use crate::{
-    config::PredicatesApi,
-    service::observers::{
+    config::PredicatesApi, service::observers::{
         insert_entry_in_observers, open_readwrite_observers_db_conn, remove_entry_from_observers,
         update_observer_progress, update_observer_streaming_enabled,
-    },
-    try_error, try_info,
+    }, try_error, try_info, utils::monitoring::PrometheusMonitoring
 };
 
 use super::observers::{
@@ -39,6 +37,7 @@ pub async fn start_observers_http_server(
     observer_commands_tx: &std::sync::mpsc::Sender<ObserverCommand>,
     observer_event_rx: crossbeam_channel::Receiver<ObserverEvent>,
     bitcoin_scan_op_tx: crossbeam_channel::Sender<BitcoinChainhookSpecification>,
+    prometheus: &PrometheusMonitoring,
     ctx: &Context,
 ) -> Result<Shutdown, String> {
     // Build and start HTTP server.
@@ -51,6 +50,7 @@ pub async fn start_observers_http_server(
     // Spawn predicate observer event tread.
     let moved_config = config.clone();
     let moved_ctx = ctx.clone();
+    let moved_prometheus = prometheus.clone();
     let _ = hiro_system_kit::thread_named("observers_api-events").spawn(move || loop {
         let event = match observer_event_rx.recv() {
             Ok(cmd) => cmd,
@@ -72,8 +72,10 @@ pub async fn start_observers_http_server(
                     };
                 let report = ObserverReport::default();
                 insert_entry_in_observers(&spec, &report, &observers_db_conn, &moved_ctx);
+                moved_prometheus.metrics_register_predicate();
                 match spec {
                     ChainhookSpecification::Bitcoin(predicate_spec) => {
+                        // TODO: This action blocks this thread until the scan operation is complete. We should not do this.
                         let _ = bitcoin_scan_op_tx.send(predicate_spec);
                     }
                     _ => {}
@@ -109,6 +111,7 @@ pub async fn start_observers_http_server(
                         }
                     };
                 remove_entry_from_observers(&uuid, &observers_db_conn, &moved_ctx);
+                moved_prometheus.metrics_deregister_predicate();
             }
             ObserverEvent::BitcoinPredicateTriggered(data) => {
                 if let Some(ref tip) = data.apply.last() {
@@ -426,7 +429,7 @@ mod test {
 
     use crate::{
         config::{Config, PredicatesApi, PredicatesApiConfig},
-        service::observers::{delete_observers_db, initialize_observers_db},
+        service::observers::{delete_observers_db, initialize_observers_db}, utils::monitoring::PrometheusMonitoring,
     };
 
     use super::start_observers_http_server;
@@ -448,6 +451,7 @@ mod test {
             &observer_command_tx,
             observer_event_rx,
             bitcoin_scan_op_tx,
+            &PrometheusMonitoring::new(),
             &ctx,
         )
         .await

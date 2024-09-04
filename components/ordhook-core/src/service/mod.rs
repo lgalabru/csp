@@ -149,6 +149,7 @@ impl Service {
                 observer_specs,
                 find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap(),
                 predicate_activity_relayer.is_some(),
+                &self.prometheus,
                 &self.config,
                 &self.ctx,
             )?;
@@ -181,6 +182,7 @@ impl Service {
         Ok(())
     }
 
+    // TODO: Deprecated? Only used by ordhook-sdk-js.
     pub async fn start_event_observer(
         &mut self,
         observer_sidecar: ObserverSidecar,
@@ -196,6 +198,7 @@ impl Service {
             vec![],
             0,
             true,
+            &self.prometheus,
             &self.config,
             &self.ctx,
         )?;
@@ -294,12 +297,14 @@ impl Service {
             let moved_ctx = self.ctx.clone();
             let moved_observer_commands_tx = observer_command_tx.clone();
             let moved_observer_event_rx = observer_event_rx.clone();
+            let moved_prometheus = self.prometheus.clone();
             let _ = hiro_system_kit::thread_named("HTTP Observers API").spawn(move || {
                 let _ = hiro_system_kit::nestable_block_on(start_observers_http_server(
                     &moved_config,
                     &moved_observer_commands_tx,
                     moved_observer_event_rx,
                     bitcoin_scan_op_tx,
+                    &moved_prometheus,
                     &moved_ctx,
                 ));
             });
@@ -326,6 +331,7 @@ impl Service {
         Ok(())
     }
 
+    // TODO: Deprecated? Only used by ordhook-sdk-js.
     pub fn set_up_observer_config(
         &self,
         predicates: Vec<BitcoinChainhookSpecification>,
@@ -342,6 +348,7 @@ impl Service {
             predicates,
             0,
             enable_internal_trigger,
+            &self.prometheus,
             &self.config,
             &self.ctx,
         )?;
