@@ -17,8 +17,13 @@ use super::{
     verifier::{VerifiedBrc20BalanceData, VerifiedBrc20TokenDeployData, VerifiedBrc20TransferData},
 };
 
-pub fn brc20_new_cache(config: &Config) -> Brc20MemoryCache {
-    Brc20MemoryCache::new(config.resources.brc20_lru_cache_size)
+/// If the given `config` has BRC-20 enabled, returns a BRC-20 memory cache.
+pub fn brc20_new_cache(config: &Config) -> Option<Brc20MemoryCache> {
+    if config.meta_protocols.brc20 {
+        Some(Brc20MemoryCache::new(config.resources.brc20_lru_cache_size))
+    } else {
+        None
+    }
 }
 
 /// Keeps BRC20 DB rows before they're inserted into SQLite. Use `flush` to insert.

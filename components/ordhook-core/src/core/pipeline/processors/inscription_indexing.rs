@@ -19,7 +19,10 @@ use std::hash::BuildHasherDefault;
 
 use crate::{
     core::{
-        meta_protocols::brc20::{cache::{brc20_new_cache, Brc20MemoryCache}, db::brc20_new_rw_db_conn},
+        meta_protocols::brc20::{
+            cache::{brc20_new_cache, Brc20MemoryCache},
+            db::brc20_new_rw_db_conn,
+        },
         pipeline::processors::block_archiving::store_compacted_blocks,
         protocol::{
             inscription_parsing::{
@@ -177,7 +180,7 @@ pub fn process_blocks(
     sequence_cursor: &mut SequenceCursor,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
     inscriptions_db_conn_rw: &mut Connection,
-    brc20_cache: &mut Brc20MemoryCache,
+    brc20_cache: &mut Option<Brc20MemoryCache>,
     brc20_db_conn_rw: &mut Option<Connection>,
     ordhook_config: &OrdhookConfig,
     post_processor: &Option<Sender<BitcoinBlockData>>,
@@ -185,7 +188,6 @@ pub fn process_blocks(
     ctx: &Context,
 ) -> Vec<BitcoinBlockData> {
     let mut cache_l1 = BTreeMap::new();
-
     let mut updated_blocks = vec![];
 
     for _cursor in 0..next_blocks.len() {
@@ -217,7 +219,7 @@ pub fn process_blocks(
             cache_l2,
             &inscriptions_db_tx,
             brc20_db_tx.as_ref(),
-            brc20_cache,
+            brc20_cache.as_mut(),
             prometheus,
             ordhook_config,
             ctx,
@@ -286,7 +288,7 @@ pub fn process_block(
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
     inscriptions_db_tx: &Transaction,
     brc20_db_tx: Option<&Transaction>,
-    brc20_cache: &mut Brc20MemoryCache,
+    brc20_cache: Option<&mut Brc20MemoryCache>,
     prometheus: &PrometheusMonitoring,
     ordhook_config: &OrdhookConfig,
     ctx: &Context,
@@ -325,14 +327,15 @@ pub fn process_block(
     // Handle transfers
     let _ = augment_block_with_ordinals_transfer_data(block, inscriptions_db_tx, true, &inner_ctx);
 
-    if let Some(brc20_db_tx) = brc20_db_tx {
-        write_brc20_block_operations(
+    match (brc20_db_tx, brc20_cache) {
+        (Some(brc20_db_tx), Some(brc20_cache)) => write_brc20_block_operations(
             block,
             &mut brc20_operation_map,
             brc20_cache,
-            &brc20_db_tx,
+            brc20_db_tx,
             &ctx,
-        );
+        ),
+        _ => {}
     }
 
     prometheus.metrics_block_indexed(block.block_identifier.index);
