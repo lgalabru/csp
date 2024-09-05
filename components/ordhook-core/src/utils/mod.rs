@@ -1,5 +1,6 @@
 pub mod bitcoind;
 pub mod logger;
+pub mod monitoring;
 
 use std::{
     fs,

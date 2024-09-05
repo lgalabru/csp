@@ -39,11 +39,12 @@ use crate::{
         OrdhookConfig,
     },
     db::{
-        get_any_entry_in_ordinal_activities, open_ordhook_db_conn_rocks_db_loop,
-        open_readonly_ordhook_db_conn,
+        get_any_entry_in_ordinal_activities, get_latest_indexed_inscription_number,
+        open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn,
     },
     service::write_brc20_block_operations,
     try_error, try_info,
+    utils::monitoring::PrometheusMonitoring,
 };
 
 use crate::db::{TransactionBytesCursor, TraversalResult};
@@ -61,12 +62,14 @@ pub fn start_inscription_indexing_processor(
     config: &Config,
     ctx: &Context,
     post_processor: Option<Sender<BitcoinBlockData>>,
+    prometheus: &PrometheusMonitoring,
 ) -> PostProcessorController {
     let (commands_tx, commands_rx) = crossbeam_channel::bounded::<PostProcessorCommand>(2);
     let (events_tx, events_rx) = crossbeam_channel::unbounded::<PostProcessorEvent>();
 
     let config = config.clone();
     let ctx = ctx.clone();
+    let prometheus = prometheus.clone();
     let handle: JoinHandle<()> = hiro_system_kit::thread_named("Inscription indexing runloop")
         .spawn(move || {
             let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
@@ -143,6 +146,7 @@ pub fn start_inscription_indexing_processor(
                     &mut brc20_db_conn_rw,
                     &ordhook_config,
                     &post_processor,
+                    &prometheus,
                     &ctx,
                 );
 
@@ -181,6 +185,7 @@ pub fn process_blocks(
     brc20_db_conn_rw: &mut Option<Connection>,
     ordhook_config: &OrdhookConfig,
     post_processor: &Option<Sender<BitcoinBlockData>>,
+    prometheus: &PrometheusMonitoring,
     ctx: &Context,
 ) -> Vec<BitcoinBlockData> {
     let mut cache_l1 = BTreeMap::new();
@@ -216,6 +221,7 @@ pub fn process_blocks(
             &inscriptions_db_tx,
             brc20_db_tx.as_ref(),
             brc20_cache.as_mut(),
+            prometheus,
             ordhook_config,
             ctx,
         );
@@ -284,6 +290,7 @@ pub fn process_block(
     inscriptions_db_tx: &Transaction,
     brc20_db_tx: Option<&Transaction>,
     brc20_cache: Option<&mut Brc20MemoryCache>,
+    prometheus: &PrometheusMonitoring,
     ordhook_config: &OrdhookConfig,
     ctx: &Context,
 ) -> Result<(), String> {
@@ -307,7 +314,7 @@ pub fn process_block(
         Context::empty()
     };
 
-    // Handle inscriptions
+    // Inscriptions
     if any_processable_transactions {
         let _ = augment_block_with_ordinals_inscriptions_data_and_write_to_db_tx(
             block,
@@ -317,10 +324,9 @@ pub fn process_block(
             &inner_ctx,
         );
     }
-
-    // Handle transfers
+    // Transfers
     let _ = augment_block_with_ordinals_transfer_data(block, inscriptions_db_tx, true, &inner_ctx);
-
+    // BRC-20
     match (brc20_db_tx, brc20_cache) {
         (Some(brc20_db_tx), Some(brc20_cache)) => write_brc20_block_operations(
             block,
@@ -331,6 +337,12 @@ pub fn process_block(
         ),
         _ => {}
     }
+
+    // Monitoring
+    prometheus.metrics_block_indexed(block.block_identifier.index);
+    prometheus.metrics_inscription_indexed(
+        get_latest_indexed_inscription_number(inscriptions_db_tx, &inner_ctx).unwrap_or(0),
+    );
 
     Ok(())
 }

@@ -23,7 +23,8 @@ use crate::core::protocol::inscription_parsing::{
 use crate::core::protocol::inscription_sequencing::SequenceCursor;
 use crate::core::{new_traversals_lazy_cache, should_sync_ordhook_db, should_sync_rocks_db};
 use crate::db::{
-    delete_data_in_ordhook_db, find_latest_inscription_block_height, insert_entry_in_blocks,
+    delete_data_in_ordhook_db, find_latest_inscription_block_height,
+    get_latest_indexed_inscription_number, insert_entry_in_blocks,
     open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn, open_readwrite_ordhook_dbs,
     update_ordinals_db_with_block, BlockBytesCursor, TransactionBytesCursor,
 };
@@ -31,6 +32,7 @@ use crate::db::{find_missing_blocks, run_compaction, update_sequence_metadata_wi
 use crate::scan::bitcoin::process_block_with_predicates;
 use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
 use crate::service::runloops::start_bitcoin_scan_runloop;
+use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_debug, try_error, try_info};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
 use chainhook_sdk::chainhooks::types::{
@@ -59,13 +61,18 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 pub struct Service {
+    pub prometheus: PrometheusMonitoring,
     pub config: Config,
     pub ctx: Context,
 }
 
 impl Service {
     pub fn new(config: Config, ctx: Context) -> Self {
-        Self { config, ctx }
+        Self {
+            prometheus: PrometheusMonitoring::new(),
+            config,
+            ctx,
+        }
     }
 
     pub async fn run(
@@ -77,8 +84,29 @@ impl Service {
         check_blocks_integrity: bool,
         stream_indexing_to_observers: bool,
     ) -> Result<(), String> {
-        let mut event_observer_config = self.config.get_event_observer_config();
+        // Start Prometheus monitoring server.
+        if let Some(port) = self.config.network.prometheus_monitoring_port {
+            let registry_moved = self.prometheus.registry.clone();
+            let ctx_cloned = self.ctx.clone();
+            let _ = std::thread::spawn(move || {
+                let _ = hiro_system_kit::nestable_block_on(start_serving_prometheus_metrics(
+                    port,
+                    registry_moved,
+                    ctx_cloned,
+                ));
+            });
+        }
+        let ordhook_db =
+            open_readonly_ordhook_db_conn(&self.config.expected_cache_path(), &self.ctx)
+                .expect("unable to retrieve ordhook db");
+        self.prometheus.initialize(
+            0,
+            get_latest_indexed_inscription_number(&ordhook_db, &self.ctx).unwrap_or(0),
+            find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap_or(0),
+        );
 
+        // Catch-up with chain tip.
+        let mut event_observer_config = self.config.get_event_observer_config();
         let block_post_processor = if stream_indexing_to_observers && !observer_specs.is_empty() {
             let mut chainhook_config: ChainhookConfig = ChainhookConfig::new();
             let specs = observer_specs.clone();
@@ -93,8 +121,6 @@ impl Service {
         } else {
             None
         };
-
-        // Catch-up with chain tip
         self.catch_up_with_chain_tip(false, check_blocks_integrity, block_post_processor)
             .await?;
         try_info!(
@@ -116,18 +142,14 @@ impl Service {
         };
 
         // Observers handling
-        let ordhook_db =
-            open_readonly_ordhook_db_conn(&self.config.expected_cache_path(), &self.ctx)
-                .expect("unable to retrieve ordhook db");
-        let chain_tip_height =
-            find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap();
         // 1) update event_observer_config with observers ready to be used
         // 2) catch-up outdated observers by dispatching replays
         let (chainhook_config, outdated_observers) =
             create_and_consolidate_chainhook_config_with_predicates(
                 observer_specs,
-                chain_tip_height,
+                find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap(),
                 predicate_activity_relayer.is_some(),
+                &self.prometheus,
                 &self.config,
                 &self.ctx,
             )?;
@@ -160,6 +182,7 @@ impl Service {
         Ok(())
     }
 
+    // TODO: Deprecated? Only used by ordhook-sdk-js.
     pub async fn start_event_observer(
         &mut self,
         observer_sidecar: ObserverSidecar,
@@ -175,6 +198,7 @@ impl Service {
             vec![],
             0,
             true,
+            &self.prometheus,
             &self.config,
             &self.ctx,
         )?;
@@ -273,12 +297,14 @@ impl Service {
             let moved_ctx = self.ctx.clone();
             let moved_observer_commands_tx = observer_command_tx.clone();
             let moved_observer_event_rx = observer_event_rx.clone();
+            let moved_prometheus = self.prometheus.clone();
             let _ = hiro_system_kit::thread_named("HTTP Observers API").spawn(move || {
                 let _ = hiro_system_kit::nestable_block_on(start_observers_http_server(
                     &moved_config,
                     &moved_observer_commands_tx,
                     moved_observer_event_rx,
                     bitcoin_scan_op_tx,
+                    &moved_prometheus,
                     &moved_ctx,
                 ));
             });
@@ -305,6 +331,7 @@ impl Service {
         Ok(())
     }
 
+    // TODO: Deprecated? Only used by ordhook-sdk-js.
     pub fn set_up_observer_config(
         &self,
         predicates: Vec<BitcoinChainhookSpecification>,
@@ -321,6 +348,7 @@ impl Service {
             predicates,
             0,
             enable_internal_trigger,
+            &self.prometheus,
             &self.config,
             &self.ctx,
         )?;
@@ -347,6 +375,7 @@ impl Service {
         let mut brc20_cache = brc20_new_cache(&self.config);
         let ctx = self.ctx.clone();
         let config = self.config.clone();
+        let prometheus = self.prometheus.clone();
 
         let _ = hiro_system_kit::thread_named("Observer Sidecar Runloop").spawn(move || loop {
             select! {
@@ -357,6 +386,7 @@ impl Service {
                             &blocks_ids_to_rollback,
                             &cache_l2,
                             &mut brc20_cache,
+                            &prometheus,
                             &config,
                             &ctx,
                         );
@@ -485,6 +515,7 @@ impl Service {
                 &self.config,
                 &self.ctx,
                 block_post_processor.clone(),
+                &self.prometheus,
             );
 
             try_info!(
@@ -652,6 +683,7 @@ pub fn chainhook_sidecar_mutate_blocks(
     blocks_ids_to_rollback: &Vec<BlockIdentifier>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
     brc20_cache: &mut Option<Brc20MemoryCache>,
+    prometheus: &PrometheusMonitoring,
     config: &Config,
     ctx: &Context,
 ) {
@@ -736,6 +768,7 @@ pub fn chainhook_sidecar_mutate_blocks(
                 &inscriptions_db_tx,
                 brc20_db_tx.as_ref(),
                 brc20_cache.as_mut(),
+                prometheus,
                 &ordhook_config,
                 &ctx,
             );

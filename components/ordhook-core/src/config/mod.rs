@@ -1,5 +1,4 @@
 use crate::core::OrdhookConfig;
-pub use chainhook_sdk::indexer::IndexerConfig;
 use chainhook_sdk::observer::EventObserverConfig;
 use chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
@@ -81,6 +80,16 @@ pub struct UrlConfig {
     pub file_url: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct IndexerConfig {
+    pub bitcoin_network: BitcoinNetwork,
+    pub bitcoind_rpc_url: String,
+    pub bitcoind_rpc_username: String,
+    pub bitcoind_rpc_password: String,
+    pub bitcoin_block_signaling: BitcoinBlockSignaling,
+    pub prometheus_monitoring_port: Option<u16>,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct ResourcesConfig {
     pub ulimit: usize,
@@ -136,7 +145,7 @@ impl Config {
             display_logs: false,
             cache_path: self.storage.working_dir.clone(),
             bitcoin_network: self.network.bitcoin_network.clone(),
-            stacks_network: self.network.stacks_network.clone(),
+            stacks_network: StacksNetwork::Devnet,
             prometheus_monitoring_port: None,
             data_handler_tx: None,
         }
@@ -192,8 +201,8 @@ impl Config {
                 bitcoin_block_signaling: BitcoinBlockSignaling::Stacks(
                     StacksNodeConfig::default_localhost(DEFAULT_INGESTION_PORT),
                 ),
-                stacks_network: StacksNetwork::Devnet,
                 bitcoin_network: BitcoinNetwork::Regtest,
+                prometheus_monitoring_port: None,
             },
             logs: LogConfig {
                 ordinals_internals: true,
@@ -227,8 +236,8 @@ impl Config {
                 bitcoin_block_signaling: BitcoinBlockSignaling::Stacks(
                     StacksNodeConfig::default_localhost(DEFAULT_INGESTION_PORT),
                 ),
-                stacks_network: StacksNetwork::Testnet,
                 bitcoin_network: BitcoinNetwork::Testnet,
+                prometheus_monitoring_port: Some(9153),
             },
             logs: LogConfig {
                 ordinals_internals: true,
@@ -265,8 +274,8 @@ impl Config {
                 bitcoin_block_signaling: BitcoinBlockSignaling::Stacks(
                     StacksNodeConfig::default_localhost(DEFAULT_INGESTION_PORT),
                 ),
-                stacks_network: StacksNetwork::Mainnet,
                 bitcoin_network: BitcoinNetwork::Mainnet,
+                prometheus_monitoring_port: Some(9153),
             },
             logs: LogConfig {
                 ordinals_internals: true,
