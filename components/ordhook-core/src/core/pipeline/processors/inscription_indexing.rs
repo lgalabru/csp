@@ -346,3 +346,148 @@ pub fn process_block(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use chainhook_sdk::{
+        types::{
+            bitcoin::{OutPoint, TxIn},
+            BitcoinBlockData, BitcoinBlockMetadata, BitcoinNetwork, BitcoinTransactionData,
+            BitcoinTransactionMetadata, BlockIdentifier, OrdinalInscriptionNumber,
+            OrdinalInscriptionRevealData, OrdinalOperation, TransactionIdentifier,
+        },
+        utils::Context,
+    };
+
+    use crate::{
+        config::Config,
+        core::{new_traversals_lazy_cache, protocol::inscription_sequencing::SequenceCursor},
+        db::open_readwrite_ordhook_db_conn,
+        initialize_databases,
+        utils::monitoring::PrometheusMonitoring,
+    };
+
+    use super::process_blocks;
+
+    fn new_test_reveal_tx() -> BitcoinTransactionData {
+        BitcoinTransactionData {
+            transaction_identifier: TransactionIdentifier {
+                hash: "0xd0f18a93b9a3056738fda5a746fad2bf34d6af2683d23cd0d149a55839f4a1a6".to_string(),
+            },
+            operations: vec![],
+            metadata: BitcoinTransactionMetadata {
+                inputs: vec![
+                    TxIn {
+                        previous_output: OutPoint {
+                            txid: TransactionIdentifier { hash: "0xc1dd7be2e65d730a4179de6c3e0a405bedd9aa087c67630b7a9ed706c42dcb98".to_string() },
+                            vout: 0,
+                            value: 20000,
+                            block_height: 839007,
+                        },
+                        script_sig: "".to_string(),
+                        sequence: 4294967293,
+                        witness: vec![
+                            "0x67d6ad98e0fe8ecbc26802b4d8dbc146b82313363aaf3817cce9adc792156f5db91f0e3825c495168c64e8a0200f7d9d6d2be7db1878f5ae1df2ae3d3b0f4165".to_string(),
+                            "0x20a4708f4864038fcebb242d49be567064bd5c51da729f93027e663acc1c5f21c9ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d3800387b2270223a226272632d3230222c226f70223a227472616e73666572222c227469636b223a2250555053222c22616d74223a22353030227d68".to_string(),
+                            "0xc1e1574b78ce2c76a1a5e8d705f44dbe4af66360e360852af0ace68bb1ece30899".to_string(),
+                        ],
+                    },
+                ],
+                outputs: vec![],
+                // outputs: vec![
+                //     TxOut { value: 330, script_pubkey: "0x512065d342f532b2c75c57ce9623d471554544b07e890d8e3f5a29e72589748b343c".to_string() },
+                //     TxOut { value: 1004, script_pubkey: "0x00141e32a0ba325a0cdc2553840209146d906fa88f5e".to_string() },
+                // ],
+                ordinal_operations: vec![],
+                stacks_operations: vec![],
+                brc20_operation: None,
+                proof: None,
+                fee: 0,
+                index: 0,
+            },
+        }
+    }
+
+    fn new_test_block(transactions: Vec<BitcoinTransactionData>) -> BitcoinBlockData {
+        BitcoinBlockData {
+            block_identifier: BlockIdentifier {
+                index: 838964,
+                hash: "0x000000000000000000018ddf8a6484db391fb85c9f9ddc384f03a92729423aaf"
+                    .to_string(),
+            },
+            parent_block_identifier: BlockIdentifier {
+                hash: "0x000000000000000000021f8b96d34c0f223281d7d825dd3588c2858c96e689d4"
+                    .to_string(),
+                index: 838963,
+            },
+            timestamp: 1712982301,
+            transactions,
+            metadata: BitcoinBlockMetadata {
+                network: BitcoinNetwork::Mainnet,
+            },
+        }
+    }
+
+    #[test]
+    fn process() {
+        let ctx = Context::empty();
+        let mut config = Config::mainnet_default();
+        config.storage.working_dir = "tmp".to_string();
+        // config.storage.observers_working_dir = "tmp".to_string();
+        let db_conns = initialize_databases(&config, &ctx);
+        let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
+        let mut sequence_cursor = SequenceCursor::new(&db_conns.ordhook);
+        let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
+        let mut conn =
+            open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx).expect("");
+
+        let results = process_blocks(
+            &mut next_blocks,
+            &mut sequence_cursor,
+            &cache_l2,
+            &mut conn,
+            &mut None,
+            &mut None,
+            &config.get_ordhook_config(),
+            &None,
+            &PrometheusMonitoring::new(),
+            &ctx,
+        );
+
+        assert_eq!(results.len(), 1);
+        let transactions = &results[0].transactions;
+        assert_eq!(transactions.len(), 1);
+        let parsed_tx = &transactions[0];
+        assert_eq!(parsed_tx.metadata.ordinal_operations.len(), 1);
+        assert_eq!(
+            parsed_tx.metadata.ordinal_operations[0],
+            OrdinalOperation::InscriptionRevealed(
+                OrdinalInscriptionRevealData {
+                    content_bytes: "0x7b2270223a226272632d3230222c226f70223a227472616e73666572222c227469636b223a2250555053222c22616d74223a22353030227d".to_string(),
+                    content_type: "text/plain;charset=utf-8".to_string(),
+                    content_length: 56,
+                    inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
+                    inscription_fee: 0,
+                    inscription_output_value: 0,
+                    inscription_id: "d0f18a93b9a3056738fda5a746fad2bf34d6af2683d23cd0d149a55839f4a1a6i0".to_string(),
+                    inscription_input_index: 0,
+                    inscription_pointer: None,
+                    inscriber_address: None,
+                    delegate: None,
+                    metaprotocol: None,
+                    metadata: None,
+                    parent: None,
+                    ordinal_number: 0,
+                    ordinal_block_height: 0,
+                    ordinal_offset: 0,
+                    tx_index: 0,
+                    transfers_pre_inscription: 0,
+                    satpoint_post_inscription: "".to_string(),
+                    curse_type: None,
+                },
+            )
+        );
+    }
+}

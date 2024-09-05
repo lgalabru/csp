@@ -837,7 +837,7 @@ pub fn find_latest_transfers_block_height(db_conn: &Connection, ctx: &Context) -
 
 pub fn get_latest_indexed_inscription_number(db_conn: &Connection, ctx: &Context) -> Option<u64> {
     let args: &[&dyn ToSql] = &[];
-    let query = "SELECT MAX(jubilee_inscription_number) FROM inscriptions";
+    let query = "SELECT COALESCE(MAX(jubilee_inscription_number), 0) FROM inscriptions";
     perform_query_one(query, args, db_conn, ctx, |row| row.get(0).unwrap())
 }
 
