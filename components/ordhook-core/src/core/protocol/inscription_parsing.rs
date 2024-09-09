@@ -244,13 +244,26 @@ pub fn get_inscriptions_transferred_in_block(
 
 #[cfg(test)]
 mod test {
-    use chainhook_sdk::types::BitcoinBlockData;
+    use std::collections::HashMap;
+
+    use chainhook_sdk::{
+        types::{BitcoinBlockData, BitcoinNetwork, OrdinalOperation},
+        utils::Context,
+    };
 
     use test_case::test_case;
 
-    use crate::utils::test_helpers::{new_test_block, new_test_reveal_tx_with_operation, new_test_transfer_tx_with_operation};
+    use crate::{
+        config::Config,
+        utils::test_helpers::{
+            new_test_block, new_test_raw_block, new_test_reveal_raw_tx, new_test_reveal_tx, new_test_reveal_tx_with_operation, new_test_transfer_tx_with_operation
+        },
+    };
 
-    use super::{get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block};
+    use super::{
+        get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
+        parse_inscriptions_and_standardize_block, parse_inscriptions_in_standardized_block,
+    };
 
     #[test_case(&new_test_block(vec![]) => 0; "with empty block")]
     #[test_case(&new_test_block(vec![new_test_reveal_tx_with_operation()]) => 1; "with reveal transaction")]
@@ -264,5 +277,51 @@ mod test {
     #[test_case(&new_test_block(vec![new_test_transfer_tx_with_operation()]) => 1; "with transfer transaction")]
     fn gets_transfers_in_block(block: &BitcoinBlockData) -> usize {
         get_inscriptions_transferred_in_block(block).len()
+    }
+
+    #[test]
+    fn parses_inscriptions_in_block() {
+        let mut block = new_test_block(vec![new_test_reveal_tx()]);
+        let ctx = Context::empty();
+        let mut config = Config::mainnet_default();
+        config.storage.working_dir = "tmp".to_string();
+        parse_inscriptions_in_standardized_block(
+            &mut block,
+            &mut HashMap::new(),
+            &config.get_ordhook_config(),
+            &ctx,
+        );
+        let OrdinalOperation::InscriptionRevealed(reveal) =
+            &block.transactions[0].metadata.ordinal_operations[0]
+        else {
+            panic!();
+        };
+        assert_eq!(
+            reveal.inscription_id,
+            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string()
+        );
+        assert_eq!(reveal.content_bytes, "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string());
+        assert_eq!(reveal.content_length, 94);
+    }
+
+    #[test]
+    fn parses_inscriptions_in_raw_block() {
+        let raw_block = new_test_raw_block(vec![new_test_reveal_raw_tx()]);
+        let block = parse_inscriptions_and_standardize_block(
+            raw_block,
+            &BitcoinNetwork::Mainnet,
+            &Context::empty(),
+        ).unwrap();
+        let OrdinalOperation::InscriptionRevealed(reveal) =
+            &block.transactions[0].metadata.ordinal_operations[0]
+        else {
+            panic!();
+        };
+        assert_eq!(
+            reveal.inscription_id,
+            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string()
+        );
+        assert_eq!(reveal.content_bytes, "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string());
+        assert_eq!(reveal.content_length, 94);
     }
 }
