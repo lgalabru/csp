@@ -1,6 +1,8 @@
 pub mod bitcoind;
 pub mod logger;
 pub mod monitoring;
+#[cfg(test)]
+pub mod test_helpers;
 
 use std::{
     fs,
