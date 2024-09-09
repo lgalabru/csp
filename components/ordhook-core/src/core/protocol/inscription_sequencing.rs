@@ -968,3 +968,45 @@ pub fn consolidate_block_with_pre_computed_ordinals_data(
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    mod cursor {
+        use chainhook_sdk::{bitcoin::Network, utils::Context};
+
+        use test_case::test_case;
+
+        use crate::{
+            config::Config,
+            core::protocol::inscription_sequencing::SequenceCursor,
+            db::update_sequence_metadata_with_block,
+            drop_databases, initialize_databases,
+            utils::test_helpers::{new_test_block, new_test_reveal_tx_with_operation},
+        };
+
+        #[test_case((780000, false) => (1, 1); "with blessed pre jubilee")]
+        #[test_case((780000, true) => (-1, -1); "with cursed pre jubilee")]
+        #[test_case((850000, false) => (1, 1); "with blessed post jubilee")]
+        #[test_case((850000, true) => (-1, 1); "with cursed post jubilee")]
+        fn picks_next((block_height, cursed): (u64, bool)) -> (i64, i64) {
+            let ctx = Context::empty();
+            let config = Config::test_default();
+            drop_databases(&config);
+            let db_conns = initialize_databases(&config, &ctx);
+            let mut block = new_test_block(vec![new_test_reveal_tx_with_operation()]);
+            block.block_identifier.index = block_height;
+            // Set inscription 0.
+            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
+
+            // Pick next.
+            let mut cursor = SequenceCursor::new(&db_conns.ordhook);
+            let next = cursor.pick_next(
+                cursed,
+                block.block_identifier.index + 1,
+                &Network::Bitcoin,
+                &ctx,
+            );
+            (next.classic, next.jubilee)
+        }
+    }
+}

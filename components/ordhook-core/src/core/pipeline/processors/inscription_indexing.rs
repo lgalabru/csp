@@ -356,12 +356,11 @@ mod test {
     use crate::{
         config::Config,
         core::{
-            meta_protocols::brc20::cache::brc20_new_cache,
-            new_traversals_lazy_cache,
+            meta_protocols::brc20::cache::brc20_new_cache, new_traversals_lazy_cache,
             protocol::inscription_sequencing::SequenceCursor,
         },
         db::open_readwrite_ordhook_db_conn,
-        initialize_databases,
+        drop_databases, initialize_databases,
         utils::{
             monitoring::PrometheusMonitoring,
             test_helpers::{new_test_block, new_test_reveal_tx},
@@ -373,8 +372,8 @@ mod test {
     #[test]
     fn process_block_with_inscription() {
         let ctx = Context::empty();
-        let mut config = Config::mainnet_default();
-        config.storage.working_dir = "tmp".to_string();
+        let config = Config::test_default();
+        drop_databases(&config);
         let db_conns = initialize_databases(&config, &ctx);
         let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
         let mut sequence_cursor = SequenceCursor::new(&db_conns.ordhook);
@@ -419,7 +418,7 @@ mod test {
         let mut config = Config::mainnet_default();
         config.storage.working_dir = "tmp".to_string();
         config.meta_protocols.brc20 = true;
-
+        drop_databases(&config);
         let mut db_conns = initialize_databases(&config, &ctx);
         let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
         let mut sequence_cursor = SequenceCursor::new(&db_conns.ordhook);

@@ -284,6 +284,13 @@ impl Config {
             meta_protocols: MetaProtocolsConfig { brc20: false },
         }
     }
+
+    #[cfg(test)]
+    pub fn test_default() -> Config {
+        let mut config = Self::mainnet_default();
+        config.storage.working_dir = "tmp".to_string();
+        config
+    }
 }
 
 pub fn default_cache_path() -> String {
