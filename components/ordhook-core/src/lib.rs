@@ -39,7 +39,10 @@ pub struct DbConnections {
 #[cfg(test)]
 /// Drops DB files in a test environment.
 pub fn drop_databases(config: &Config) {
-    for entry in std::fs::read_dir(&config.expected_cache_path()).unwrap() {
+    let Ok(dir) = std::fs::read_dir(&config.expected_cache_path()) else {
+        return;
+    };
+    for entry in dir {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.is_file() {
