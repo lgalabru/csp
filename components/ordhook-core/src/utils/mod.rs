@@ -44,19 +44,6 @@ pub fn write_file_content_at_path(file_path: &PathBuf, content: &[u8]) -> Result
     Ok(())
 }
 
-pub fn format_satpoint_to_watch(
-    transaction_identifier: &TransactionIdentifier,
-    output_index: usize,
-    offset: u64,
-) -> String {
-    format!(
-        "{}:{}:{}",
-        transaction_identifier.get_hash_bytes_str(),
-        output_index,
-        offset
-    )
-}
-
 pub fn format_inscription_id(
     transaction_identifier: &TransactionIdentifier,
     inscription_subindex: usize,

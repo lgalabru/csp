@@ -4,9 +4,9 @@ use chainhook_sdk::utils::Context;
 use rand::{thread_rng, Rng};
 use rocksdb::{DBPinnableSlice, Options, DB};
 
-use crate::{try_error, try_warn};
+use crate::{config::Config, try_error, try_warn};
 
-fn get_default_ordhook_db_file_path_rocks_db(base_dir: &PathBuf) -> PathBuf {
+fn get_default_blocks_db_path(base_dir: &PathBuf) -> PathBuf {
     let mut destination_path = base_dir.clone();
     destination_path.push("hord.rocksdb");
     destination_path
@@ -45,34 +45,13 @@ fn rocks_db_default_options(ulimit: usize, _memory_available: usize) -> Options 
     opts
 }
 
-pub fn open_readonly_ordhook_db_conn_rocks_db(
-    base_dir: &PathBuf,
-    ulimit: usize,
-    memory_available: usize,
-    _ctx: &Context,
-) -> Result<DB, String> {
-    let path = get_default_ordhook_db_file_path_rocks_db(&base_dir);
-    let mut opts = rocks_db_default_options(ulimit, memory_available);
-    opts.set_disable_auto_compactions(true);
-    opts.set_max_background_jobs(0);
-    let db = DB::open_for_read_only(&opts, path, false)
-        .map_err(|e| format!("unable to read hord.rocksdb: {}", e.to_string()))?;
-    Ok(db)
-}
-
-pub fn open_ordhook_db_conn_rocks_db_loop(
-    readwrite: bool,
-    base_dir: &PathBuf,
-    ulimit: usize,
-    memory_available: usize,
-    ctx: &Context,
-) -> DB {
+pub fn open_blocks_db_with_retry(readwrite: bool, config: &Config, ctx: &Context) -> DB {
     let mut retries = 0;
     let blocks_db = loop {
         let res = if readwrite {
-            open_readwrite_ordhook_db_conn_rocks_db(&base_dir, ulimit, memory_available, &ctx)
+            open_readwrite_blocks_db(config, &ctx)
         } else {
-            open_readonly_ordhook_db_conn_rocks_db(&base_dir, ulimit, memory_available, &ctx)
+            open_readonly_blocks_db(config, &ctx)
         };
         match res {
             Ok(db) => break db,
@@ -91,14 +70,20 @@ pub fn open_ordhook_db_conn_rocks_db_loop(
     blocks_db
 }
 
-fn open_readwrite_ordhook_db_conn_rocks_db(
-    base_dir: &PathBuf,
-    ulimit: usize,
-    memory_available: usize,
-    _ctx: &Context,
-) -> Result<DB, String> {
-    let path = get_default_ordhook_db_file_path_rocks_db(&base_dir);
-    let opts = rocks_db_default_options(ulimit, memory_available);
+pub fn open_readonly_blocks_db(config: &Config, _ctx: &Context) -> Result<DB, String> {
+    let path = get_default_blocks_db_path(&config.expected_cache_path());
+    let mut opts =
+        rocks_db_default_options(config.resources.ulimit, config.resources.memory_available);
+    opts.set_disable_auto_compactions(true);
+    opts.set_max_background_jobs(0);
+    let db = DB::open_for_read_only(&opts, path, false)
+        .map_err(|e| format!("unable to read hord.rocksdb: {}", e.to_string()))?;
+    Ok(db)
+}
+
+fn open_readwrite_blocks_db(config: &Config, _ctx: &Context) -> Result<DB, String> {
+    let path = get_default_blocks_db_path(&config.expected_cache_path());
+    let opts = rocks_db_default_options(config.resources.ulimit, config.resources.memory_available);
     let db = DB::open(&opts, path)
         .map_err(|e| format!("unable to read-write hord.rocksdb: {}", e.to_string()))?;
     Ok(db)

@@ -2,9 +2,7 @@ pub mod blocks;
 pub mod cursor;
 pub mod ordinals;
 
-use std::path::PathBuf;
-
-use blocks::{delete_blocks_in_block_range, open_ordhook_db_conn_rocks_db_loop};
+use blocks::{delete_blocks_in_block_range, open_blocks_db_with_retry};
 
 use ordinals::{delete_inscriptions_in_block_range, open_readwrite_ordhook_db_conn};
 use rocksdb::DB;
@@ -12,17 +10,16 @@ use rusqlite::Connection;
 
 use chainhook_sdk::utils::Context;
 
-use crate::{core::meta_protocols::brc20::db::delete_activity_in_block_range, try_info};
+use crate::{
+    config::Config, core::meta_protocols::brc20::db::delete_activity_in_block_range, try_info,
+};
 
 pub fn open_readwrite_ordhook_dbs(
-    base_dir: &PathBuf,
-    ulimit: usize,
-    memory_available: usize,
+    config: &Config,
     ctx: &Context,
 ) -> Result<(DB, Connection), String> {
-    let blocks_db =
-        open_ordhook_db_conn_rocks_db_loop(true, &base_dir, ulimit, memory_available, &ctx);
-    let inscriptions_db = open_readwrite_ordhook_db_conn(&base_dir, &ctx)?;
+    let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
+    let inscriptions_db = open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx)?;
     Ok((blocks_db, inscriptions_db))
 }
 

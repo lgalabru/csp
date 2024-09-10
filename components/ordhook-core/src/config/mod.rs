@@ -1,4 +1,3 @@
-use crate::core::OrdhookConfig;
 use chainhook_sdk::observer::EventObserverConfig;
 use chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
@@ -115,21 +114,6 @@ impl Config {
         match self.http_api {
             PredicatesApi::Off => false,
             PredicatesApi::On(_) => true,
-        }
-    }
-
-    pub fn get_ordhook_config(&self) -> OrdhookConfig {
-        OrdhookConfig {
-            resources: self.resources.clone(),
-            db_path: self.expected_cache_path(),
-            first_inscription_height: match self.network.bitcoin_network {
-                BitcoinNetwork::Mainnet => 767430,
-                BitcoinNetwork::Regtest => 1,
-                BitcoinNetwork::Testnet => 2413343,
-                BitcoinNetwork::Signet => 112402,
-            },
-            logs: self.logs.clone(),
-            meta_protocols: self.meta_protocols.clone(),
         }
     }
 

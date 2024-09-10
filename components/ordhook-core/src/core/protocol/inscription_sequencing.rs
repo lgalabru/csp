@@ -19,11 +19,12 @@ use fxhash::FxHasher;
 use rusqlite::{Connection, Transaction};
 
 use crate::{
+    config::Config,
     core::{
         meta_protocols::brc20::db::{
             augment_transaction_with_brc20_operation_data, get_brc20_operations_on_block,
         },
-        resolve_absolute_pointer, OrdhookConfig,
+        resolve_absolute_pointer,
     },
     db::{
         cursor::TransactionBytesCursor,
@@ -78,10 +79,10 @@ pub fn parallelize_inscription_data_computations(
     cache_l1: &mut BTreeMap<(TransactionIdentifier, usize, u64), TraversalResult>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
     inscriptions_db_tx: &Transaction,
-    ordhook_config: &OrdhookConfig,
+    config: &Config,
     ctx: &Context,
 ) -> Result<bool, String> {
-    let inner_ctx = if ordhook_config.logs.ordinals_internals {
+    let inner_ctx = if config.logs.ordinals_internals {
         ctx.clone()
     } else {
         Context::empty()
@@ -98,7 +99,7 @@ pub fn parallelize_inscription_data_computations(
 
     let has_transactions_to_process = !transactions_ids.is_empty() || !l1_cache_hits.is_empty();
 
-    let thread_pool_capacity = ordhook_config.resources.get_optimal_thread_pool_capacity();
+    let thread_pool_capacity = config.resources.get_optimal_thread_pool_capacity();
 
     // Nothing to do? early return
     if !has_transactions_to_process {
@@ -117,9 +118,7 @@ pub fn parallelize_inscription_data_computations(
 
         let moved_traversal_tx = traversal_tx.clone();
         let moved_ctx = inner_ctx.clone();
-        let moved_ordhook_db_path = ordhook_config.db_path.clone();
-        let ulimit = ordhook_config.resources.ulimit;
-        let memory_available = ordhook_config.resources.memory_available;
+        let moved_config = config.clone();
 
         let local_cache = cache_l2.clone();
 
@@ -135,15 +134,12 @@ pub fn parallelize_inscription_data_computations(
                 {
                     let traversal: Result<(TraversalResult, u64, _), String> =
                         compute_satoshi_number(
-                            &moved_ordhook_db_path,
                             &block_identifier,
                             &transaction_id,
                             input_index,
                             inscription_pointer,
                             &local_cache,
-                            ulimit,
-                            memory_available,
-                            false,
+                            &moved_config,
                             &moved_ctx,
                         );
                     let _ = moved_traversal_tx.send((traversal, prioritary, thread_index));

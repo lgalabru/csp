@@ -19,15 +19,15 @@ use ordhook::config::Config;
 use ordhook::core::meta_protocols::brc20::db::{
     brc20_new_rw_db_conn, get_brc20_operations_on_block,
 };
-use ordhook::core::new_traversals_lazy_cache;
 use ordhook::core::pipeline::download_and_pipeline_blocks;
 use ordhook::core::pipeline::processors::block_archiving::start_block_archiving_processor;
 use ordhook::core::pipeline::processors::start_inscription_indexing_processor;
 use ordhook::core::protocol::inscription_parsing::parse_inscriptions_and_standardize_block;
 use ordhook::core::protocol::satoshi_numbering::compute_satoshi_number;
+use ordhook::core::{first_inscription_height, new_traversals_lazy_cache};
 use ordhook::db::blocks::{
     find_block_bytes_at_block_height, find_last_block_inserted, find_missing_blocks,
-    open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn_rocks_db,
+    open_blocks_db_with_retry, open_readonly_blocks_db,
 };
 use ordhook::db::cursor::BlockBytesCursor;
 use ordhook::db::ordinals::{
@@ -712,15 +712,12 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
             let transaction_identifier = TransactionIdentifier::new(&cmd.transaction_id);
             let cache = new_traversals_lazy_cache(100);
             let (res, _, mut back_trace) = compute_satoshi_number(
-                &config.get_ordhook_config().db_path,
                 &block.block_identifier,
                 &transaction_identifier,
                 cmd.input_index,
                 0,
                 &Arc::new(cache),
-                config.resources.ulimit,
-                config.resources.memory_available,
-                true,
+                &config,
                 ctx,
             )?;
             back_trace.reverse();
@@ -750,27 +747,20 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let last_known_block =
                     find_latest_inscription_block_height(&db_connections.ordhook, ctx)?;
                 if last_known_block.is_none() {
-                    open_ordhook_db_conn_rocks_db_loop(
-                        true,
-                        &config.expected_cache_path(),
-                        config.resources.ulimit,
-                        config.resources.memory_available,
-                        ctx,
-                    );
+                    open_blocks_db_with_retry(true, &config, ctx);
                 }
 
-                let ordhook_config = config.get_ordhook_config();
                 let start_block = match cmd.start_at_block {
                     Some(entry) => entry,
                     None => match last_known_block {
                         Some(entry) => entry,
                         None => {
+                            let first_height = first_inscription_height(&config);
                             warn!(
                                 ctx.expect_logger(),
-                                "Inscription ingestion will start at block #{}",
-                                ordhook_config.first_inscription_height
+                                "Inscription ingestion will start at block #{}", first_height
                             );
-                            ordhook_config.first_inscription_height
+                            first_height
                         }
                     },
                 };
@@ -819,13 +809,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             // Create DB
             initialize_databases(&config, ctx);
-            open_ordhook_db_conn_rocks_db_loop(
-                true,
-                &config.expected_cache_path(),
-                config.resources.ulimit,
-                config.resources.memory_available,
-                ctx,
-            );
+            open_blocks_db_with_retry(true, &config, ctx);
         }
         Command::Db(OrdhookDbCommand::Sync(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
@@ -835,10 +819,9 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
         }
         Command::Db(OrdhookDbCommand::Repair(subcmd)) => match subcmd {
             RepairCommand::Blocks(cmd) => {
-                let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-                let mut ordhook_config = config.get_ordhook_config();
+                let mut config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
                 if let Some(network_threads) = cmd.network_threads {
-                    ordhook_config.resources.bitcoind_rpc_threads = network_threads;
+                    config.resources.bitcoind_rpc_threads = network_threads;
                 }
                 let blocks = cmd.get_blocks();
                 let block_ingestion_processor =
@@ -846,20 +829,14 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 download_and_pipeline_blocks(
                     &config,
                     blocks,
-                    ordhook_config.first_inscription_height,
+                    first_inscription_height(&config),
                     Some(&block_ingestion_processor),
                     10_000,
                     ctx,
                 )
                 .await?;
                 if let Some(true) = cmd.debug {
-                    let blocks_db = open_ordhook_db_conn_rocks_db_loop(
-                        false,
-                        &config.get_ordhook_config().db_path,
-                        config.resources.ulimit,
-                        config.resources.memory_available,
-                        ctx,
-                    );
+                    let blocks_db = open_blocks_db_with_retry(false, &config, ctx);
                     for i in cmd.get_blocks().into_iter() {
                         let block_bytes =
                             find_block_bytes_at_block_height(i as u32, 10, &blocks_db, ctx)
@@ -874,10 +851,9 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 }
             }
             RepairCommand::Inscriptions(cmd) => {
-                let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-                let mut ordhook_config = config.get_ordhook_config();
+                let mut config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
                 if let Some(network_threads) = cmd.network_threads {
-                    ordhook_config.resources.bitcoind_rpc_threads = network_threads;
+                    config.resources.bitcoind_rpc_threads = network_threads;
                 }
                 let block_post_processor = match cmd.repair_observers {
                     Some(true) => {
@@ -898,7 +874,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 download_and_pipeline_blocks(
                     &config,
                     blocks,
-                    ordhook_config.first_inscription_height,
+                    first_inscription_height(&config),
                     Some(&inscription_indexing_processor),
                     10_000,
                     ctx,
@@ -932,12 +908,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
         Command::Db(OrdhookDbCommand::Check(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             {
-                let blocks_db = open_readonly_ordhook_db_conn_rocks_db(
-                    &config.expected_cache_path(),
-                    config.resources.ulimit,
-                    config.resources.memory_available,
-                    ctx,
-                )?;
+                let blocks_db = open_readonly_blocks_db(&config, ctx)?;
                 let tip = find_last_block_inserted(&blocks_db);
                 println!("Tip: {}", tip);
                 let missing_blocks = find_missing_blocks(&blocks_db, 1, tip, ctx);
@@ -957,12 +928,8 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 return Err("Deletion aborted".to_string());
             }
 
-            let (blocks_db_rw, inscriptions_db_conn_rw) = open_readwrite_ordhook_dbs(
-                &config.expected_cache_path(),
-                config.resources.ulimit,
-                config.resources.memory_available,
-                &ctx,
-            )?;
+            let (blocks_db_rw, inscriptions_db_conn_rw) =
+                open_readwrite_ordhook_dbs(&config, &ctx)?;
             let brc_20_db_conn_rw = brc20_new_rw_db_conn(&config, ctx);
 
             delete_data_in_ordhook_db(

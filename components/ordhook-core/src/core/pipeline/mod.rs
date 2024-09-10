@@ -57,8 +57,6 @@ pub async fn download_and_pipeline_blocks(
         bitcoin_block_signaling: config.network.bitcoin_block_signaling.clone(),
     };
 
-    let ordhook_config = config.get_ordhook_config();
-
     let number_of_blocks_to_process = blocks.len() as u64;
 
     let (block_compressed_tx, block_compressed_rx) = crossbeam_channel::bounded(speed);
@@ -83,13 +81,13 @@ pub async fn download_and_pipeline_blocks(
     // - 1 thread for the thread handling networking
     // - 1 thread for the thread handling disk serialization
     let thread_pool_network_response_processing_capacity =
-        ordhook_config.resources.get_optimal_thread_pool_capacity();
+        config.resources.get_optimal_thread_pool_capacity();
     // For each worker in that pool, we want to bound the size of the queue to avoid OOM
     // Blocks size can range from 1 to 4Mb (when packed with witness data).
     // Start blocking networking when each worker has a backlog of 8 blocks seems reasonable.
     let worker_queue_size = 2;
 
-    for _ in 0..ordhook_config.resources.bitcoind_rpc_threads {
+    for _ in 0..config.resources.bitcoind_rpc_threads {
         if let Some(block_height) = block_heights.pop_front() {
             let config = moved_config.clone();
             let ctx = moved_ctx.clone();

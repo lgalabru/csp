@@ -37,10 +37,9 @@ use crate::{
             satoshi_numbering::TraversalResult,
             satoshi_tracking::augment_block_with_ordinals_transfer_data,
         },
-        OrdhookConfig,
     },
     db::{
-        blocks::open_ordhook_db_conn_rocks_db_loop,
+        blocks::open_blocks_db_with_retry,
         cursor::TransactionBytesCursor,
         ordinals::{
             get_any_entry_in_ordinal_activities, get_latest_indexed_inscription_number,
@@ -80,7 +79,6 @@ pub fn start_inscription_indexing_processor(
 
             let mut inscriptions_db_conn_rw =
                 open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx).unwrap();
-            let ordhook_config = config.get_ordhook_config();
             let mut empty_cycles = 0;
 
             let inscriptions_db_conn =
@@ -118,13 +116,7 @@ pub fn start_inscription_indexing_processor(
                 };
 
                 {
-                    let blocks_db_rw = open_ordhook_db_conn_rocks_db_loop(
-                        true,
-                        &config.expected_cache_path(),
-                        config.resources.ulimit,
-                        config.resources.memory_available,
-                        &ctx,
-                    );
+                    let blocks_db_rw = open_blocks_db_with_retry(true, &config, &ctx);
                     store_compacted_blocks(
                         compacted_blocks,
                         true,
@@ -146,9 +138,9 @@ pub fn start_inscription_indexing_processor(
                     &mut inscriptions_db_conn_rw,
                     &mut brc20_cache,
                     &mut brc20_db_conn_rw,
-                    &ordhook_config,
                     &post_processor,
                     &prometheus,
+                    &config,
                     &ctx,
                 );
 
@@ -185,9 +177,9 @@ pub fn process_blocks(
     inscriptions_db_conn_rw: &mut Connection,
     brc20_cache: &mut Option<Brc20MemoryCache>,
     brc20_db_conn_rw: &mut Option<Connection>,
-    ordhook_config: &OrdhookConfig,
     post_processor: &Option<Sender<BitcoinBlockData>>,
     prometheus: &PrometheusMonitoring,
+    config: &Config,
     ctx: &Context,
 ) -> Vec<BitcoinBlockData> {
     let mut cache_l1 = BTreeMap::new();
@@ -224,7 +216,7 @@ pub fn process_blocks(
             brc20_db_tx.as_ref(),
             brc20_cache.as_mut(),
             prometheus,
-            ordhook_config,
+            config,
             ctx,
         );
 
@@ -293,12 +285,12 @@ pub fn process_block(
     brc20_db_tx: Option<&Transaction>,
     brc20_cache: Option<&mut Brc20MemoryCache>,
     prometheus: &PrometheusMonitoring,
-    ordhook_config: &OrdhookConfig,
+    config: &Config,
     ctx: &Context,
 ) -> Result<(), String> {
     // Parsed BRC20 ops will be deposited here for this block.
     let mut brc20_operation_map = HashMap::new();
-    parse_inscriptions_in_standardized_block(block, &mut brc20_operation_map, ordhook_config, &ctx);
+    parse_inscriptions_in_standardized_block(block, &mut brc20_operation_map, config, &ctx);
 
     let any_processable_transactions = parallelize_inscription_data_computations(
         &block,
@@ -306,11 +298,11 @@ pub fn process_block(
         cache_l1,
         cache_l2,
         inscriptions_db_tx,
-        &ordhook_config,
+        config,
         ctx,
     )?;
 
-    let inner_ctx = if ordhook_config.logs.ordinals_internals {
+    let inner_ctx = if config.logs.ordinals_internals {
         ctx.clone()
     } else {
         Context::empty()
@@ -361,9 +353,7 @@ mod test {
             meta_protocols::brc20::cache::brc20_new_cache, new_traversals_lazy_cache,
             protocol::inscription_sequencing::SequenceCursor,
         },
-        db::{
-            blocks::open_ordhook_db_conn_rocks_db_loop, ordinals::open_readwrite_ordhook_db_conn,
-        },
+        db::{blocks::open_blocks_db_with_retry, ordinals::open_readwrite_ordhook_db_conn},
         drop_databases, initialize_databases,
         utils::{
             monitoring::PrometheusMonitoring,
@@ -381,13 +371,7 @@ mod test {
         // Create DBs
         drop_databases(&config);
         let db_conns = initialize_databases(&config, &ctx);
-        let _ = open_ordhook_db_conn_rocks_db_loop(
-            true,
-            &config.expected_cache_path(),
-            config.resources.ulimit,
-            config.resources.memory_available,
-            &ctx,
-        );
+        let _ = open_blocks_db_with_retry(true, &config, &ctx);
 
         let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
         let mut sequence_cursor = SequenceCursor::new(&db_conns.ordhook);
@@ -402,9 +386,9 @@ mod test {
             &mut inscriptions_db_conn_rw,
             &mut None,
             &mut None,
-            &config.get_ordhook_config(),
             &None,
             &PrometheusMonitoring::new(),
+            &config,
             &ctx,
         );
 
@@ -448,9 +432,9 @@ mod test {
             &mut inscriptions_db_conn_rw,
             &mut brc20_cache,
             &mut db_conns.brc20,
-            &config.get_ordhook_config(),
             &None,
             &PrometheusMonitoring::new(),
+            &config,
             &ctx,
         );
 

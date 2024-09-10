@@ -6,16 +6,15 @@ use dashmap::DashMap;
 use fxhash::{FxBuildHasher, FxHasher};
 use std::hash::BuildHasherDefault;
 use std::ops::Div;
-use std::path::PathBuf;
 
-use chainhook_sdk::utils::Context;
+use chainhook_sdk::{types::BitcoinNetwork, utils::Context};
 
 use crate::{
-    config::{Config, LogConfig, MetaProtocolsConfig, ResourcesConfig},
+    config::Config,
     db::{
         blocks::{
             find_last_block_inserted, find_pinned_block_bytes_at_block_height,
-            open_ordhook_db_conn_rocks_db_loop,
+            open_blocks_db_with_retry,
         },
         cursor::TransactionBytesCursor,
         ordinals::{find_latest_inscription_block_height, open_readonly_ordhook_db_conn},
@@ -24,13 +23,13 @@ use crate::{
     utils::bitcoind::bitcoind_get_block_height,
 };
 
-#[derive(Clone, Debug)]
-pub struct OrdhookConfig {
-    pub resources: ResourcesConfig,
-    pub db_path: PathBuf,
-    pub first_inscription_height: u64,
-    pub logs: LogConfig,
-    pub meta_protocols: MetaProtocolsConfig,
+pub fn first_inscription_height(config: &Config) -> u64 {
+    match config.network.bitcoin_network {
+        BitcoinNetwork::Mainnet => 767430,
+        BitcoinNetwork::Regtest => 1,
+        BitcoinNetwork::Testnet => 2413343,
+        BitcoinNetwork::Signet => 112402,
+    }
 }
 
 pub fn new_traversals_cache(
@@ -116,13 +115,7 @@ pub fn compute_next_satpoint_data(
 }
 
 pub fn should_sync_rocks_db(config: &Config, ctx: &Context) -> Result<Option<(u64, u64)>, String> {
-    let blocks_db = open_ordhook_db_conn_rocks_db_loop(
-        true,
-        &config.expected_cache_path(),
-        config.resources.ulimit,
-        config.resources.memory_available,
-        &ctx,
-    );
+    let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let inscriptions_db_conn = open_readonly_ordhook_db_conn(&config.expected_cache_path(), &ctx)?;
     let last_compressed_block = find_last_block_inserted(&blocks_db) as u64;
     let last_indexed_block = match find_latest_inscription_block_height(&inscriptions_db_conn, ctx)?
@@ -143,13 +136,7 @@ pub fn should_sync_ordhook_db(
     config: &Config,
     ctx: &Context,
 ) -> Result<Option<(u64, u64, usize)>, String> {
-    let blocks_db = open_ordhook_db_conn_rocks_db_loop(
-        true,
-        &config.expected_cache_path(),
-        config.resources.ulimit,
-        config.resources.memory_available,
-        &ctx,
-    );
+    let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let mut start_block = find_last_block_inserted(&blocks_db) as u64;
 
     if start_block == 0 {
@@ -169,7 +156,7 @@ pub fn should_sync_ordhook_db(
             start_block += 1;
         }
         None => {
-            start_block = start_block.min(config.get_ordhook_config().first_inscription_height);
+            start_block = start_block.min(first_inscription_height(config));
         }
     };
 

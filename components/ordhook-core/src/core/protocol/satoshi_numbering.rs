@@ -3,12 +3,10 @@ use chainhook_sdk::utils::Context;
 use dashmap::DashMap;
 use fxhash::FxHasher;
 use std::hash::BuildHasherDefault;
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::db::blocks::{
-    find_pinned_block_bytes_at_block_height, open_ordhook_db_conn_rocks_db_loop,
-};
+use crate::config::Config;
+use crate::db::blocks::{find_pinned_block_bytes_at_block_height, open_blocks_db_with_retry};
 
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
 use crate::ord::height::Height;
@@ -45,7 +43,6 @@ impl TraversalResult {
 }
 
 pub fn compute_satoshi_number(
-    blocks_db_dir: &PathBuf,
     block_identifier: &BlockIdentifier,
     transaction_identifier: &TransactionIdentifier,
     inscription_input_index: usize,
@@ -53,17 +50,14 @@ pub fn compute_satoshi_number(
     traversals_cache: &Arc<
         DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>,
     >,
-    ulimit: usize,
-    memory_available: usize,
-    _back_tracking: bool,
+    config: &Config,
     ctx: &Context,
 ) -> Result<(TraversalResult, u64, Vec<(u32, [u8; 8], usize)>), String> {
     let mut ordinal_offset = inscription_pointer;
     let ordinal_block_number = block_identifier.index as u32;
     let txid = transaction_identifier.get_8_hash_bytes();
     let mut back_track = vec![];
-    let blocks_db =
-        open_ordhook_db_conn_rocks_db_loop(false, &blocks_db_dir, ulimit, memory_available, &ctx);
+    let blocks_db = open_blocks_db_with_retry(false, &config, &ctx);
 
     let (mut tx_cursor, mut ordinal_block_number) = match traversals_cache
         .get(&(block_identifier.index as u32, txid.clone()))

@@ -9,7 +9,7 @@ use std::{
 use crate::{
     config::Config,
     core::pipeline::{PostProcessorCommand, PostProcessorController, PostProcessorEvent},
-    db::blocks::{insert_entry_in_blocks, open_ordhook_db_conn_rocks_db_loop},
+    db::blocks::{insert_entry_in_blocks, open_blocks_db_with_retry},
     try_error, try_info,
 };
 
@@ -26,13 +26,7 @@ pub fn start_block_archiving_processor(
     let ctx = ctx.clone();
     let handle: JoinHandle<()> = hiro_system_kit::thread_named("Processor Runloop")
         .spawn(move || {
-            let blocks_db_rw = open_ordhook_db_conn_rocks_db_loop(
-                true,
-                &config.expected_cache_path(),
-                config.resources.ulimit,
-                config.resources.memory_available,
-                &ctx,
-            );
+            let blocks_db_rw = open_blocks_db_with_retry(true, &config, &ctx);
             let mut processed_blocks = 0;
 
             loop {

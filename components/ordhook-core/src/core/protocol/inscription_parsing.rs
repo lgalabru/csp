@@ -11,9 +11,9 @@ use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
+use crate::config::Config;
 use crate::core::meta_protocols::brc20::brc20_activation_height;
 use crate::core::meta_protocols::brc20::parser::{parse_brc20_operation, ParsedBrc20Operation};
-use crate::core::OrdhookConfig;
 use crate::ord::envelope::{Envelope, ParsedEnvelope, RawEnvelope};
 use crate::ord::inscription::Inscription;
 use crate::ord::inscription_id::InscriptionId;
@@ -112,7 +112,7 @@ pub fn parse_inscriptions_from_standardized_tx(
     block_identifier: &BlockIdentifier,
     network: &BitcoinNetwork,
     brc20_operation_map: &mut HashMap<String, ParsedBrc20Operation>,
-    ordhook_config: &OrdhookConfig,
+    config: &Config,
     ctx: &Context,
 ) -> Vec<OrdinalOperation> {
     let mut operations = vec![];
@@ -129,7 +129,7 @@ pub fn parse_inscriptions_from_standardized_tx(
             tx.transaction_identifier.get_hash_bytes_str(),
         ) {
             for (reveal, inscription) in inscriptions.into_iter() {
-                if ordhook_config.meta_protocols.brc20
+                if config.meta_protocols.brc20
                     && block_identifier.index >= brc20_activation_height(&network)
                 {
                     match parse_brc20_operation(&inscription) {
@@ -199,7 +199,7 @@ pub fn parse_inscriptions_and_standardize_block(
 pub fn parse_inscriptions_in_standardized_block(
     block: &mut BitcoinBlockData,
     brc20_operation_map: &mut HashMap<String, ParsedBrc20Operation>,
-    ordhook_config: &OrdhookConfig,
+    config: &Config,
     ctx: &Context,
 ) {
     for tx in block.transactions.iter_mut() {
@@ -208,7 +208,7 @@ pub fn parse_inscriptions_in_standardized_block(
             &block.block_identifier,
             &block.metadata.network,
             brc20_operation_map,
-            ordhook_config,
+            config,
             ctx,
         );
     }
@@ -286,12 +286,7 @@ mod test {
         let ctx = Context::empty();
         let mut config = Config::mainnet_default();
         config.storage.working_dir = "tmp".to_string();
-        parse_inscriptions_in_standardized_block(
-            &mut block,
-            &mut HashMap::new(),
-            &config.get_ordhook_config(),
-            &ctx,
-        );
+        parse_inscriptions_in_standardized_block(&mut block, &mut HashMap::new(), &config, &ctx);
         let OrdinalOperation::InscriptionRevealed(reveal) =
             &block.transactions[0].metadata.ordinal_operations[0]
         else {
