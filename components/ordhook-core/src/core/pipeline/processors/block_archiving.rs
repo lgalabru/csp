@@ -9,7 +9,7 @@ use std::{
 use crate::{
     config::Config,
     core::pipeline::{PostProcessorCommand, PostProcessorController, PostProcessorEvent},
-    db::{insert_entry_in_blocks, open_ordhook_db_conn_rocks_db_loop},
+    db::blocks::{insert_entry_in_blocks, open_ordhook_db_conn_rocks_db_loop},
     try_error, try_info,
 };
 

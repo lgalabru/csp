@@ -24,7 +24,8 @@ use crate::{
         perform_query_set,
     },
     scan::bitcoin::process_block_with_predicates,
-    try_warn, utils::monitoring::PrometheusMonitoring,
+    try_warn,
+    utils::monitoring::PrometheusMonitoring,
 };
 
 pub fn update_observer_progress(

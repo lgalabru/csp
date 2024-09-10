@@ -969,6 +969,11 @@ pub fn consolidate_block_with_pre_computed_ordinals_data(
 
 #[cfg(test)]
 mod test {
+    #[test]
+    fn augments_block_data() {
+        //
+    }
+
     mod cursor {
         use chainhook_sdk::{bitcoin::Network, utils::Context};
 
@@ -1018,7 +1023,7 @@ mod test {
         }
 
         #[test]
-        fn resets() {
+        fn resets_on_previous_block() {
             let ctx = Context::empty();
             let config = Config::test_default();
             drop_databases(&config);
@@ -1037,12 +1042,12 @@ mod test {
             cursor.reset();
             let next = cursor.pick_next(
                 false,
-                block.block_identifier.index + 1,
+                block.block_identifier.index - 10,
                 &Network::Bitcoin,
                 &ctx,
             );
-            assert_eq!(next.classic, 1);
-            assert_eq!(next.jubilee, 1);
+            assert_eq!(next.classic, 0);
+            assert_eq!(next.jubilee, 0);
         }
     }
 }

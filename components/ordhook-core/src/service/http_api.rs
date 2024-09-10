@@ -22,10 +22,13 @@ use rocket::{
 use rocket::{response::status::Custom, State};
 
 use crate::{
-    config::PredicatesApi, service::observers::{
+    config::PredicatesApi,
+    service::observers::{
         insert_entry_in_observers, open_readwrite_observers_db_conn, remove_entry_from_observers,
         update_observer_progress, update_observer_streaming_enabled,
-    }, try_error, try_info, utils::monitoring::PrometheusMonitoring
+    },
+    try_error, try_info,
+    utils::monitoring::PrometheusMonitoring,
 };
 
 use super::observers::{
@@ -54,7 +57,7 @@ pub async fn start_observers_http_server(
     let _ = hiro_system_kit::thread_named("observers_api-events").spawn(move || loop {
         let event = match observer_event_rx.recv() {
             Ok(cmd) => cmd,
-            Err(_) => break
+            Err(_) => break,
         };
         match event {
             ObserverEvent::PredicateRegistered(spec) => {
@@ -151,7 +154,11 @@ async fn build_server(
     let PredicatesApi::On(ref api_config) = config.http_api else {
         unreachable!();
     };
-    try_info!(ctx, "Listening on port {} for chainhook predicate registrations", api_config.http_port);
+    try_info!(
+        ctx,
+        "Listening on port {} for chainhook predicate registrations",
+        api_config.http_port
+    );
     let moved_config = config.clone();
     let moved_ctx = ctx.clone();
     let moved_observer_commands_tx = observer_command_tx.clone();
@@ -429,7 +436,8 @@ mod test {
 
     use crate::{
         config::{Config, PredicatesApi, PredicatesApiConfig},
-        service::observers::{delete_observers_db, initialize_observers_db}, utils::monitoring::PrometheusMonitoring,
+        service::observers::{delete_observers_db, initialize_observers_db},
+        utils::monitoring::PrometheusMonitoring,
     };
 
     use super::start_observers_http_server;

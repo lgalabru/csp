@@ -6,9 +6,10 @@ use std::hash::BuildHasherDefault;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::db::{
-    find_pinned_block_bytes_at_block_height, open_ordhook_db_conn_rocks_db_loop, BlockBytesCursor,
+use crate::db::blocks::{
+    find_pinned_block_bytes_at_block_height, open_ordhook_db_conn_rocks_db_loop,
 };
+use crate::db::BlockBytesCursor;
 
 use crate::db::{TransactionBytesCursor, TraversalResult};
 use crate::ord::height::Height;

@@ -39,8 +39,8 @@ use crate::{
         OrdhookConfig,
     },
     db::{
-        get_any_entry_in_ordinal_activities, get_latest_indexed_inscription_number,
-        open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn,
+        blocks::open_ordhook_db_conn_rocks_db_loop, get_any_entry_in_ordinal_activities,
+        get_latest_indexed_inscription_number, open_readonly_ordhook_db_conn,
     },
     service::write_brc20_block_operations,
     try_error, try_info,
@@ -359,7 +359,7 @@ mod test {
             meta_protocols::brc20::cache::brc20_new_cache, new_traversals_lazy_cache,
             protocol::inscription_sequencing::SequenceCursor,
         },
-        db::open_readwrite_ordhook_db_conn,
+        db::{blocks::open_ordhook_db_conn_rocks_db_loop, open_readwrite_ordhook_db_conn},
         drop_databases, initialize_databases,
         utils::{
             monitoring::PrometheusMonitoring,
@@ -373,8 +373,18 @@ mod test {
     fn process_block_with_inscription() {
         let ctx = Context::empty();
         let config = Config::test_default();
+
+        // Create DBs
         drop_databases(&config);
         let db_conns = initialize_databases(&config, &ctx);
+        let _ = open_ordhook_db_conn_rocks_db_loop(
+            true,
+            &config.expected_cache_path(),
+            config.resources.ulimit,
+            config.resources.memory_available,
+            &ctx,
+        );
+
         let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
         let mut sequence_cursor = SequenceCursor::new(&db_conns.ordhook);
         let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));

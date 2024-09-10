@@ -256,7 +256,8 @@ mod test {
     use crate::{
         config::Config,
         utils::test_helpers::{
-            new_test_block, new_test_raw_block, new_test_reveal_raw_tx, new_test_reveal_tx, new_test_reveal_tx_with_operation, new_test_transfer_tx_with_operation
+            new_test_block, new_test_raw_block, new_test_reveal_raw_tx, new_test_reveal_tx,
+            new_test_reveal_tx_with_operation, new_test_transfer_tx_with_operation,
         },
     };
 
@@ -311,7 +312,8 @@ mod test {
             raw_block,
             &BitcoinNetwork::Mainnet,
             &Context::empty(),
-        ).unwrap();
+        )
+        .unwrap();
         let OrdinalOperation::InscriptionRevealed(reveal) =
             &block.transactions[0].metadata.ordinal_operations[0]
         else {

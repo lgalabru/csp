@@ -25,12 +25,15 @@ use ordhook::core::pipeline::processors::block_archiving::start_block_archiving_
 use ordhook::core::pipeline::processors::start_inscription_indexing_processor;
 use ordhook::core::protocol::inscription_parsing::parse_inscriptions_and_standardize_block;
 use ordhook::core::protocol::satoshi_numbering::compute_satoshi_number;
+use ordhook::db::blocks::{
+    find_block_bytes_at_block_height, find_last_block_inserted, find_missing_blocks,
+    open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn_rocks_db,
+};
 use ordhook::db::{
     delete_data_in_ordhook_db, find_all_inscriptions_in_block, find_all_transfers_in_block,
-    find_block_bytes_at_block_height, find_inscription_with_id, find_last_block_inserted,
-    find_latest_inscription_block_height, find_missing_blocks, get_default_ordhook_db_file_path,
-    open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn,
-    open_readonly_ordhook_db_conn_rocks_db, open_readwrite_ordhook_dbs, BlockBytesCursor,
+    find_inscription_with_id, find_latest_inscription_block_height,
+    get_default_ordhook_db_file_path, open_readonly_ordhook_db_conn, open_readwrite_ordhook_dbs,
+    BlockBytesCursor,
 };
 use ordhook::download::download_archive_datasets_if_required;
 use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;

@@ -289,6 +289,8 @@ impl Config {
     pub fn test_default() -> Config {
         let mut config = Self::mainnet_default();
         config.storage.working_dir = "tmp".to_string();
+        config.resources.bitcoind_rpc_threads = 1;
+        config.resources.cpu_core_available = 1;
         config
     }
 }

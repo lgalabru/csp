@@ -15,6 +15,24 @@ use chainhook_sdk::{
 };
 
 pub fn new_test_block(transactions: Vec<BitcoinTransactionData>) -> BitcoinBlockData {
+    // Add a coinbase transaction.
+    let mut txs = vec![BitcoinTransactionData {
+        transaction_identifier: TransactionIdentifier {
+            hash: "0xd92cf8bb6f0767a52f82d72365a1bdfbc2009eb2248e945a4d85ae7da81d11c2".to_string(),
+        },
+        operations: vec![],
+        metadata: BitcoinTransactionMetadata {
+            inputs: vec![],
+            outputs: vec![],
+            ordinal_operations: vec![],
+            stacks_operations: vec![],
+            brc20_operation: None,
+            proof: None,
+            fee: 0,
+            index: 0,
+        },
+    }];
+    txs.extend(transactions);
     BitcoinBlockData {
         block_identifier: BlockIdentifier {
             index: 838964,
@@ -25,7 +43,7 @@ pub fn new_test_block(transactions: Vec<BitcoinTransactionData>) -> BitcoinBlock
             index: 838963,
         },
         timestamp: 1712982301,
-        transactions,
+        transactions: txs,
         metadata: BitcoinBlockMetadata {
             network: BitcoinNetwork::Mainnet,
         },
@@ -35,10 +53,17 @@ pub fn new_test_block(transactions: Vec<BitcoinTransactionData>) -> BitcoinBlock
 pub fn new_test_raw_block(
     transactions: Vec<BitcoinTransactionFullBreakdown>,
 ) -> BitcoinBlockFullBreakdown {
+    // Add a coinbase transaction.
+    let mut txs = vec![BitcoinTransactionFullBreakdown {
+        txid: "d92cf8bb6f0767a52f82d72365a1bdfbc2009eb2248e945a4d85ae7da81d11c2".to_string(),
+        vin: vec![],
+        vout: vec![],
+    }];
+    txs.extend(transactions);
     BitcoinBlockFullBreakdown {
         hash: "000000000000000000018ddf8a6484db391fb85c9f9ddc384f03a92729423aaf".to_string(),
         height: 838964,
-        tx: transactions,
+        tx: txs,
         time: 1712982301,
         nonce: 100,
         previousblockhash: Some(
