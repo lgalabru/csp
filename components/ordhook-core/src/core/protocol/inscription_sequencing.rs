@@ -454,6 +454,15 @@ impl<'a> SequenceCursor<'a> {
         OrdinalInscriptionNumber { classic, jubilee }
     }
 
+    pub fn increment(&mut self, cursed: bool, ctx: &Context) {
+        self.increment_jubilee_number(ctx);
+        if cursed {
+            self.increment_neg_classic(ctx);
+        } else {
+            self.increment_pos_classic(ctx);
+        };
+    }
+
     fn pick_next_pos_classic(&mut self, ctx: &Context) -> i64 {
         match self.pos_cursor {
             None => {
@@ -511,15 +520,15 @@ impl<'a> SequenceCursor<'a> {
         }
     }
 
-    pub fn increment_neg_classic(&mut self, ctx: &Context) {
+    fn increment_neg_classic(&mut self, ctx: &Context) {
         self.neg_cursor = Some(self.pick_next_neg_classic(ctx));
     }
 
-    pub fn increment_pos_classic(&mut self, ctx: &Context) {
+    fn increment_pos_classic(&mut self, ctx: &Context) {
         self.pos_cursor = Some(self.pick_next_pos_classic(ctx));
     }
 
-    pub fn increment_jubilee_number(&mut self, ctx: &Context) {
+    fn increment_jubilee_number(&mut self, ctx: &Context) {
         self.jubilee_cursor = Some(self.pick_next_jubilee_number(ctx))
     }
 }
@@ -633,18 +642,12 @@ pub fn augment_block_with_ordinals_inscriptions_data(
         else {
             continue;
         };
-        let is_curse = inscription_data.curse_type.is_some();
+        let is_cursed = inscription_data.curse_type.is_some();
         let inscription_number =
-            sequence_cursor.pick_next(is_curse, block.block_identifier.index, &network, &ctx);
+            sequence_cursor.pick_next(is_cursed, block.block_identifier.index, &network, &ctx);
         inscription_data.inscription_number = inscription_number;
 
-        sequence_cursor.increment_jubilee_number(ctx);
-        if is_curse {
-            sequence_cursor.increment_neg_classic(ctx);
-        } else {
-            sequence_cursor.increment_pos_classic(ctx);
-        };
-
+        sequence_cursor.increment(is_cursed, ctx);
         try_info!(
             ctx,
             "Unbound inscription {} (#{}) detected on Satoshi {} (block #{}, {} transfers)",
@@ -803,12 +806,7 @@ fn augment_transaction_with_ordinals_inscriptions_data(
             inscription.transfers_pre_inscription,
         );
 
-        sequence_cursor.increment_jubilee_number(ctx);
-        if is_cursed {
-            sequence_cursor.increment_neg_classic(ctx);
-        } else {
-            sequence_cursor.increment_pos_classic(ctx);
-        }
+        sequence_cursor.increment(is_cursed, ctx);
     }
     tx.metadata
         .ordinal_operations
@@ -984,10 +982,10 @@ mod test {
             utils::test_helpers::{new_test_block, new_test_reveal_tx_with_operation},
         };
 
-        #[test_case((780000, false) => (1, 1); "with blessed pre jubilee")]
-        #[test_case((780000, true) => (-1, -1); "with cursed pre jubilee")]
-        #[test_case((850000, false) => (1, 1); "with blessed post jubilee")]
-        #[test_case((850000, true) => (-1, 1); "with cursed post jubilee")]
+        #[test_case((780000, false) => (2, 2); "with blessed pre jubilee")]
+        #[test_case((780000, true) => (-2, -2); "with cursed pre jubilee")]
+        #[test_case((850000, false) => (2, 2); "with blessed post jubilee")]
+        #[test_case((850000, true) => (-2, 2); "with cursed post jubilee")]
         fn picks_next((block_height, cursed): (u64, bool)) -> (i64, i64) {
             let ctx = Context::empty();
             let config = Config::test_default();
@@ -995,18 +993,56 @@ mod test {
             let db_conns = initialize_databases(&config, &ctx);
             let mut block = new_test_block(vec![new_test_reveal_tx_with_operation()]);
             block.block_identifier.index = block_height;
-            // Set inscription 0.
-            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
 
-            // Pick next.
+            // Pick next twice so we can test all cases.
+            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
             let mut cursor = SequenceCursor::new(&db_conns.ordhook);
+            let _ = cursor.pick_next(
+                cursed,
+                block.block_identifier.index + 1,
+                &Network::Bitcoin,
+                &ctx,
+            );
+            cursor.increment(cursed, &ctx);
+
+            block.block_identifier.index = block.block_identifier.index + 1;
+            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
             let next = cursor.pick_next(
                 cursed,
                 block.block_identifier.index + 1,
                 &Network::Bitcoin,
                 &ctx,
             );
+
             (next.classic, next.jubilee)
+        }
+
+        #[test]
+        fn resets() {
+            let ctx = Context::empty();
+            let config = Config::test_default();
+            drop_databases(&config);
+            let db_conns = initialize_databases(&config, &ctx);
+            let block = new_test_block(vec![new_test_reveal_tx_with_operation()]);
+            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
+            let mut cursor = SequenceCursor::new(&db_conns.ordhook);
+            let _ = cursor.pick_next(
+                false,
+                block.block_identifier.index + 1,
+                &Network::Bitcoin,
+                &ctx,
+            );
+            cursor.increment(false, &ctx);
+
+            cursor.reset();
+            let next = cursor.pick_next(
+                false,
+                block.block_identifier.index + 1,
+                &Network::Bitcoin,
+                &ctx,
+            );
+            assert_eq!(next.classic, 1);
+            assert_eq!(next.jubilee, 1);
         }
     }
 }
