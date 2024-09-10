@@ -15,7 +15,7 @@ use crate::{
             satoshi_tracking::augment_block_with_ordinals_transfer_data,
         },
     },
-    db::{
+    db::ordinals::{
         insert_entries_from_block_in_inscriptions, open_readwrite_ordhook_db_conn,
         remove_entries_from_locations_at_block_height,
     },

@@ -26,22 +26,24 @@ use crate::{
         resolve_absolute_pointer, OrdhookConfig,
     },
     db::{
-        find_blessed_inscription_with_ordinal_number, find_nth_classic_neg_number_at_block_height,
-        find_nth_classic_pos_number_at_block_height, find_nth_jubilee_number_at_block_height,
-        format_inscription_id, update_ordinals_db_with_block, update_sequence_metadata_with_block,
-        TransactionBytesCursor, TraversalResult,
+        cursor::TransactionBytesCursor,
+        ordinals::{
+            find_all_inscriptions_in_block, find_blessed_inscription_with_ordinal_number,
+            find_nth_classic_neg_number_at_block_height,
+            find_nth_classic_pos_number_at_block_height, find_nth_jubilee_number_at_block_height,
+            update_ordinals_db_with_block, update_sequence_metadata_with_block,
+        },
     },
     ord::height::Height,
     try_error, try_info, try_warn,
+    utils::format_inscription_id,
 };
 
 use std::sync::mpsc::channel;
 
-use crate::db::find_all_inscriptions_in_block;
-
 use super::{
     inscription_parsing::get_inscriptions_revealed_in_block,
-    satoshi_numbering::compute_satoshi_number,
+    satoshi_numbering::{compute_satoshi_number, TraversalResult},
     satoshi_tracking::{
         augment_transaction_with_ordinals_transfers_data, compute_satpoint_post_transfer,
     },
@@ -982,7 +984,7 @@ mod test {
         use crate::{
             config::Config,
             core::protocol::inscription_sequencing::SequenceCursor,
-            db::update_sequence_metadata_with_block,
+            db::ordinals::update_sequence_metadata_with_block,
             drop_databases, initialize_databases,
             utils::test_helpers::{new_test_block, new_test_reveal_tx_with_operation},
         };

@@ -29,12 +29,13 @@ use ordhook::db::blocks::{
     find_block_bytes_at_block_height, find_last_block_inserted, find_missing_blocks,
     open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn_rocks_db,
 };
-use ordhook::db::{
-    delete_data_in_ordhook_db, find_all_inscriptions_in_block, find_all_transfers_in_block,
-    find_inscription_with_id, find_latest_inscription_block_height,
-    get_default_ordhook_db_file_path, open_readonly_ordhook_db_conn, open_readwrite_ordhook_dbs,
-    BlockBytesCursor,
+use ordhook::db::cursor::BlockBytesCursor;
+use ordhook::db::ordinals::{
+    find_all_inscriptions_in_block, find_all_transfers_in_block, find_inscription_with_id,
+    find_latest_inscription_block_height, get_default_ordhook_db_file_path,
+    open_readonly_ordhook_db_conn,
 };
+use ordhook::db::{delete_data_in_ordhook_db, open_readwrite_ordhook_dbs};
 use ordhook::download::download_archive_datasets_if_required;
 use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;
 use ordhook::service::observers::initialize_observers_db;

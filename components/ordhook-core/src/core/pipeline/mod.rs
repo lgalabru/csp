@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::task::JoinSet;
 
 use crate::config::Config;
-use crate::db::BlockBytesCursor;
+use crate::db::cursor::BlockBytesCursor;
 use crate::{try_debug, try_info};
 
 use chainhook_sdk::indexer::bitcoin::{

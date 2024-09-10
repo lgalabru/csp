@@ -9,11 +9,40 @@ use std::sync::Arc;
 use crate::db::blocks::{
     find_pinned_block_bytes_at_block_height, open_ordhook_db_conn_rocks_db_loop,
 };
-use crate::db::BlockBytesCursor;
 
-use crate::db::{TransactionBytesCursor, TraversalResult};
+use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
 use crate::ord::height::Height;
+use crate::ord::sat::Sat;
 use crate::try_error;
+
+#[derive(Clone, Debug)]
+pub struct TraversalResult {
+    pub inscription_number: OrdinalInscriptionNumber,
+    pub inscription_input_index: usize,
+    pub transaction_identifier_inscription: TransactionIdentifier,
+    pub ordinal_number: u64,
+    pub transfers: u32,
+}
+
+impl TraversalResult {
+    pub fn get_ordinal_coinbase_height(&self) -> u64 {
+        let sat = Sat(self.ordinal_number);
+        sat.height().n()
+    }
+
+    pub fn get_ordinal_coinbase_offset(&self) -> u64 {
+        let sat = Sat(self.ordinal_number);
+        self.ordinal_number - sat.height().starting_sat().n()
+    }
+
+    pub fn get_inscription_id(&self) -> String {
+        format!(
+            "{}i{}",
+            self.transaction_identifier_inscription.get_hash_bytes_str(),
+            self.inscription_input_index
+        )
+    }
+}
 
 pub fn compute_satoshi_number(
     blocks_db_dir: &PathBuf,

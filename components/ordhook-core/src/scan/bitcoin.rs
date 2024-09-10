@@ -4,7 +4,7 @@ use crate::core::protocol::inscription_parsing::{
     parse_inscriptions_and_standardize_block,
 };
 use crate::core::protocol::inscription_sequencing::consolidate_block_with_pre_computed_ordinals_data;
-use crate::db::get_any_entry_in_ordinal_activities;
+use crate::db::ordinals::get_any_entry_in_ordinal_activities;
 use crate::download::download_archive_datasets_if_required;
 use crate::initialize_databases;
 use crate::service::observers::{

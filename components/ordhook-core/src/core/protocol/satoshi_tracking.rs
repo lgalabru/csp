@@ -11,12 +11,13 @@ use chainhook_sdk::{
 
 use crate::{
     core::{compute_next_satpoint_data, SatPosition},
-    db::{
-        find_inscribed_ordinals_at_wached_outpoint, format_outpoint_to_watch,
-        insert_ordinal_transfer_in_locations_tx, parse_satpoint_to_watch, OrdinalLocation,
+    db::ordinals::{
+        find_inscribed_ordinals_at_wached_outpoint, insert_ordinal_transfer_in_locations_tx,
+        OrdinalLocation,
     },
     ord::height::Height,
     try_info,
+    utils::{format_outpoint_to_watch, parse_satpoint_to_watch},
 };
 use rusqlite::Transaction;
 

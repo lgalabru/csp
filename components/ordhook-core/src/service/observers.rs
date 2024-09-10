@@ -19,7 +19,7 @@ use serde_json::json;
 
 use crate::{
     config::Config,
-    db::{
+    db::ordinals::{
         create_or_open_readwrite_db, open_existing_readonly_db, perform_query_one,
         perform_query_set,
     },

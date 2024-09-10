@@ -34,20 +34,23 @@ use crate::{
                 get_bitcoin_network, get_jubilee_block_height,
                 parallelize_inscription_data_computations, SequenceCursor,
             },
+            satoshi_numbering::TraversalResult,
             satoshi_tracking::augment_block_with_ordinals_transfer_data,
         },
         OrdhookConfig,
     },
     db::{
-        blocks::open_ordhook_db_conn_rocks_db_loop, get_any_entry_in_ordinal_activities,
-        get_latest_indexed_inscription_number, open_readonly_ordhook_db_conn,
+        blocks::open_ordhook_db_conn_rocks_db_loop,
+        cursor::TransactionBytesCursor,
+        ordinals::{
+            get_any_entry_in_ordinal_activities, get_latest_indexed_inscription_number,
+            open_readonly_ordhook_db_conn, open_readwrite_ordhook_db_conn,
+        },
     },
     service::write_brc20_block_operations,
     try_error, try_info,
     utils::monitoring::PrometheusMonitoring,
 };
-
-use crate::db::{TransactionBytesCursor, TraversalResult};
 
 use crate::{
     config::Config,
@@ -55,7 +58,6 @@ use crate::{
         new_traversals_lazy_cache,
         pipeline::{PostProcessorCommand, PostProcessorController, PostProcessorEvent},
     },
-    db::open_readwrite_ordhook_db_conn,
 };
 
 pub fn start_inscription_indexing_processor(
@@ -359,7 +361,9 @@ mod test {
             meta_protocols::brc20::cache::brc20_new_cache, new_traversals_lazy_cache,
             protocol::inscription_sequencing::SequenceCursor,
         },
-        db::{blocks::open_ordhook_db_conn_rocks_db_loop, open_readwrite_ordhook_db_conn},
+        db::{
+            blocks::open_ordhook_db_conn_rocks_db_loop, ordinals::open_readwrite_ordhook_db_conn,
+        },
         drop_databases, initialize_databases,
         utils::{
             monitoring::PrometheusMonitoring,

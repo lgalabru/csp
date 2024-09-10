@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     config::Config,
-    db::{create_or_open_readwrite_db, perform_query_one, perform_query_set},
+    db::ordinals::{create_or_open_readwrite_db, perform_query_one, perform_query_set},
     try_error, try_warn,
 };
 use chainhook_sdk::{

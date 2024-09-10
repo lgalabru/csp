@@ -28,7 +28,7 @@ use core::meta_protocols::brc20::db::initialize_brc20_db;
 
 use chainhook_sdk::utils::Context;
 use config::Config;
-use db::initialize_ordhook_db;
+use db::ordinals::initialize_ordhook_db;
 use rusqlite::Connection;
 
 pub struct DbConnections {
