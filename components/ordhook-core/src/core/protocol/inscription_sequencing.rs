@@ -981,10 +981,9 @@ mod test {
             config::Config,
             core::protocol::inscription_sequencing::SequenceCursor,
             db::{
-                drop_sqlite_dbs, initialize_sqlite_dbs,
-                ordinals::update_sequence_metadata_with_block,
+                drop_all_dbs, initialize_sqlite_dbs, ordinals::update_sequence_metadata_with_block,
             },
-            utils::test_helpers::{new_test_block, new_test_reveal_tx_with_operation},
+            utils::test_helpers::{TestBlockBuilder, TestTransactionBuilder},
         };
 
         #[test_case((780000, false) => (2, 2); "with blessed pre jubilee")]
@@ -994,9 +993,11 @@ mod test {
         fn picks_next((block_height, cursed): (u64, bool)) -> (i64, i64) {
             let ctx = Context::empty();
             let config = Config::test_default();
-            drop_sqlite_dbs(&config);
+            drop_all_dbs(&config);
             let db_conns = initialize_sqlite_dbs(&config, &ctx);
-            let mut block = new_test_block(vec![new_test_reveal_tx_with_operation()]);
+            let mut block = TestBlockBuilder::new()
+                .transactions(vec![TestTransactionBuilder::new_with_operation().build()])
+                .build();
             block.block_identifier.index = block_height;
 
             // Pick next twice so we can test all cases.
@@ -1026,9 +1027,11 @@ mod test {
         fn resets_on_previous_block() {
             let ctx = Context::empty();
             let config = Config::test_default();
-            drop_sqlite_dbs(&config);
+            drop_all_dbs(&config);
             let db_conns = initialize_sqlite_dbs(&config, &ctx);
-            let block = new_test_block(vec![new_test_reveal_tx_with_operation()]);
+            let block = TestBlockBuilder::new()
+                .transactions(vec![TestTransactionBuilder::new_with_operation().build()])
+                .build();
             update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
             let mut cursor = SequenceCursor::new(&db_conns.ordinals);
             let _ = cursor.pick_next(

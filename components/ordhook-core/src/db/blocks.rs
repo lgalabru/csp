@@ -234,3 +234,33 @@ pub fn delete_blocks_in_block_range(
         .put(b"metadata::last_insert", start_block_bytes)
         .expect("unable to insert metadata");
 }
+
+#[cfg(test)]
+pub fn insert_standardized_block(
+    block: &chainhook_sdk::types::BitcoinBlockData,
+    blocks_db_rw: &DB,
+    ctx: &Context,
+) {
+    let block_bytes = match super::cursor::BlockBytesCursor::from_standardized_block(&block) {
+        Ok(block_bytes) => block_bytes,
+        Err(e) => {
+            try_error!(
+                ctx,
+                "Unable to compress block #{}: #{}",
+                block.block_identifier.index,
+                e.to_string()
+            );
+            return;
+        }
+    };
+    insert_entry_in_blocks(
+        block.block_identifier.index as u32,
+        &block_bytes,
+        true,
+        &blocks_db_rw,
+        &ctx,
+    );
+    if let Err(e) = blocks_db_rw.flush() {
+        try_error!(ctx, "{}", e.to_string());
+    }
+}

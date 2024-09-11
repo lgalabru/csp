@@ -88,21 +88,11 @@ pub fn drop_block_data_from_all_dbs(
     Ok(())
 }
 
+/// Drops DB files in a test environment.
 #[cfg(test)]
-/// Drops SQLite DB files in a test environment.
-pub fn drop_sqlite_dbs(config: &Config) {
-    let Ok(dir) = std::fs::read_dir(&config.expected_cache_path()) else {
-        return;
-    };
-    for entry in dir {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
-                if extension.starts_with("sqlite") {
-                    let _ = std::fs::remove_file(&path);
-                }
-            }
-        }
+pub fn drop_all_dbs(config: &Config) {
+    let dir_path = &config.expected_cache_path();
+    if dir_path.exists() {
+        std::fs::remove_dir_all(dir_path).expect("");
     }
 }
