@@ -5,9 +5,7 @@ mod runloops;
 use crate::config::{Config, PredicatesApi};
 use crate::core::meta_protocols::brc20::brc20_activation_height;
 use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
-use crate::core::meta_protocols::brc20::db::{
-    brc20_new_rw_db_conn, write_augmented_block_to_brc20_db,
-};
+use crate::core::meta_protocols::brc20::db::write_augmented_block_to_brc20_db;
 use crate::core::meta_protocols::brc20::parser::ParsedBrc20Operation;
 use crate::core::meta_protocols::brc20::verifier::{
     verify_brc20_operation, verify_brc20_transfer, VerifiedBrc20Operation,
@@ -30,11 +28,10 @@ use crate::db::blocks::{
 };
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
 use crate::db::ordinals::{
-    find_latest_inscription_block_height, get_latest_indexed_inscription_number,
-    open_readonly_ordhook_db_conn, update_ordinals_db_with_block,
-    update_sequence_metadata_with_block,
+    find_latest_inscription_block_height, get_latest_indexed_inscription_number, open_ordinals_db,
+    update_ordinals_db_with_block, update_sequence_metadata_with_block,
 };
-use crate::db::{delete_data_in_ordhook_db, open_readwrite_ordhook_dbs};
+use crate::db::{drop_block_data_from_all_dbs, open_all_dbs_rw};
 use crate::scan::bitcoin::process_block_with_predicates;
 use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
 use crate::service::runloops::start_bitcoin_scan_runloop;
@@ -102,9 +99,8 @@ impl Service {
                 ));
             });
         }
-        let ordhook_db =
-            open_readonly_ordhook_db_conn(&self.config.expected_cache_path(), &self.ctx)
-                .expect("unable to retrieve ordhook db");
+        let ordhook_db = open_ordinals_db(&self.config.expected_cache_path(), &self.ctx)
+            .expect("unable to retrieve ordhook db");
         self.prometheus.initialize(
             0,
             get_latest_indexed_inscription_number(&ordhook_db, &self.ctx).unwrap_or(0),
@@ -418,11 +414,9 @@ impl Service {
                 let (tip, missing_blocks) = {
                     let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
 
-                    let ordhook_db = open_readonly_ordhook_db_conn(
-                        &self.config.expected_cache_path(),
-                        &self.ctx,
-                    )
-                    .expect("unable to retrieve ordhook db");
+                    let ordhook_db =
+                        open_ordinals_db(&self.config.expected_cache_path(), &self.ctx)
+                            .expect("unable to retrieve ordhook db");
                     let tip = find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap()
                         as u32;
                     info!(
@@ -555,14 +549,13 @@ impl Service {
 }
 
 fn chainhook_sidecar_mutate_ordhook_db(command: HandleBlock, config: &Config, ctx: &Context) {
-    let (blocks_db_rw, inscriptions_db_conn_rw) = match open_readwrite_ordhook_dbs(&config, &ctx) {
+    let (blocks_db_rw, sqlite_dbs_rw) = match open_all_dbs_rw(&config, &ctx) {
         Ok(dbs) => dbs,
         Err(e) => {
             try_error!(ctx, "Unable to open readwrite connection: {e}");
             return;
         }
     };
-    let brc20_db_conn_rw = brc20_new_rw_db_conn(config, ctx);
 
     match command {
         HandleBlock::UndoBlock(block) => {
@@ -571,15 +564,13 @@ fn chainhook_sidecar_mutate_ordhook_db(command: HandleBlock, config: &Config, ct
                 "Re-org handling: reverting changes in block #{}",
                 block.block_identifier.index
             );
-            let res = delete_data_in_ordhook_db(
+            let res = drop_block_data_from_all_dbs(
                 block.block_identifier.index,
                 block.block_identifier.index,
-                &inscriptions_db_conn_rw,
                 &blocks_db_rw,
-                &brc20_db_conn_rw,
+                &sqlite_dbs_rw,
                 ctx,
             );
-
             if let Err(e) = res {
                 try_error!(
                     ctx,
@@ -612,11 +603,11 @@ fn chainhook_sidecar_mutate_ordhook_db(command: HandleBlock, config: &Config, ct
                 try_error!(ctx, "{}", e.to_string());
             }
 
-            update_ordinals_db_with_block(&block, &inscriptions_db_conn_rw, ctx);
-            update_sequence_metadata_with_block(&block, &inscriptions_db_conn_rw, &ctx);
+            update_ordinals_db_with_block(&block, &sqlite_dbs_rw.ordinals, ctx);
+            update_sequence_metadata_with_block(&block, &sqlite_dbs_rw.ordinals, &ctx);
 
-            if let Some(brc20_conn_rw) = brc20_db_conn_rw {
-                write_augmented_block_to_brc20_db(&block, &brc20_conn_rw, ctx);
+            if let Some(brc20_conn_rw) = &sqlite_dbs_rw.brc20 {
+                write_augmented_block_to_brc20_db(&block, brc20_conn_rw, ctx);
             }
         }
     }
@@ -668,23 +659,20 @@ pub fn chainhook_sidecar_mutate_blocks(
 ) {
     let mut updated_blocks_ids = vec![];
 
-    let (blocks_db_rw, mut inscriptions_db_conn_rw) =
-        match open_readwrite_ordhook_dbs(&config, &ctx) {
-            Ok(dbs) => dbs,
-            Err(e) => {
-                try_error!(ctx, "Unable to open readwrite connection: {e}");
-                return;
-            }
-        };
-    let mut brc20_db_conn_rw = brc20_new_rw_db_conn(config, ctx);
+    let (blocks_db_rw, mut sqlite_dbs_rw) = match open_all_dbs_rw(&config, &ctx) {
+        Ok(dbs) => dbs,
+        Err(e) => {
+            try_error!(ctx, "Unable to open readwrite connection: {e}");
+            return;
+        }
+    };
 
     for block_id_to_rollback in blocks_ids_to_rollback.iter() {
-        if let Err(e) = delete_data_in_ordhook_db(
+        if let Err(e) = drop_block_data_from_all_dbs(
             block_id_to_rollback.index,
             block_id_to_rollback.index,
-            &inscriptions_db_conn_rw,
             &blocks_db_rw,
-            &brc20_db_conn_rw,
+            &sqlite_dbs_rw,
             &ctx,
         ) {
             try_error!(
@@ -695,8 +683,11 @@ pub fn chainhook_sidecar_mutate_blocks(
         }
     }
 
-    let brc20_db_tx = brc20_db_conn_rw.as_mut().map(|c| c.transaction().unwrap());
-    let inscriptions_db_tx = inscriptions_db_conn_rw.transaction().unwrap();
+    let brc20_db_tx = sqlite_dbs_rw
+        .brc20
+        .as_mut()
+        .map(|c| c.transaction().unwrap());
+    let inscriptions_db_tx = sqlite_dbs_rw.ordinals.transaction().unwrap();
 
     for cache in blocks_to_mutate.iter_mut() {
         let block_bytes = match BlockBytesCursor::from_standardized_block(&cache.block) {

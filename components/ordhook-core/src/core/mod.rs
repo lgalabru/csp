@@ -17,9 +17,9 @@ use crate::{
             open_blocks_db_with_retry,
         },
         cursor::TransactionBytesCursor,
-        ordinals::{find_latest_inscription_block_height, open_readonly_ordhook_db_conn},
+        initialize_sqlite_dbs,
+        ordinals::{find_latest_inscription_block_height, open_ordinals_db},
     },
-    initialize_databases,
     utils::bitcoind::bitcoind_get_block_height,
 };
 
@@ -116,7 +116,7 @@ pub fn compute_next_satpoint_data(
 
 pub fn should_sync_rocks_db(config: &Config, ctx: &Context) -> Result<Option<(u64, u64)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
-    let inscriptions_db_conn = open_readonly_ordhook_db_conn(&config.expected_cache_path(), &ctx)?;
+    let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), &ctx)?;
     let last_compressed_block = find_last_block_inserted(&blocks_db) as u64;
     let last_indexed_block = match find_latest_inscription_block_height(&inscriptions_db_conn, ctx)?
     {
@@ -140,10 +140,10 @@ pub fn should_sync_ordhook_db(
     let mut start_block = find_last_block_inserted(&blocks_db) as u64;
 
     if start_block == 0 {
-        let _ = initialize_databases(config, ctx);
+        let _ = initialize_sqlite_dbs(config, ctx);
     }
 
-    let inscriptions_db_conn = open_readonly_ordhook_db_conn(&config.expected_cache_path(), &ctx)?;
+    let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), &ctx)?;
 
     match find_latest_inscription_block_height(&inscriptions_db_conn, ctx)? {
         Some(height) => {

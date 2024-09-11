@@ -980,8 +980,10 @@ mod test {
         use crate::{
             config::Config,
             core::protocol::inscription_sequencing::SequenceCursor,
-            db::ordinals::update_sequence_metadata_with_block,
-            drop_databases, initialize_databases,
+            db::{
+                drop_sqlite_dbs, initialize_sqlite_dbs,
+                ordinals::update_sequence_metadata_with_block,
+            },
             utils::test_helpers::{new_test_block, new_test_reveal_tx_with_operation},
         };
 
@@ -992,14 +994,14 @@ mod test {
         fn picks_next((block_height, cursed): (u64, bool)) -> (i64, i64) {
             let ctx = Context::empty();
             let config = Config::test_default();
-            drop_databases(&config);
-            let db_conns = initialize_databases(&config, &ctx);
+            drop_sqlite_dbs(&config);
+            let db_conns = initialize_sqlite_dbs(&config, &ctx);
             let mut block = new_test_block(vec![new_test_reveal_tx_with_operation()]);
             block.block_identifier.index = block_height;
 
             // Pick next twice so we can test all cases.
-            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
-            let mut cursor = SequenceCursor::new(&db_conns.ordhook);
+            update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
+            let mut cursor = SequenceCursor::new(&db_conns.ordinals);
             let _ = cursor.pick_next(
                 cursed,
                 block.block_identifier.index + 1,
@@ -1009,7 +1011,7 @@ mod test {
             cursor.increment(cursed, &ctx);
 
             block.block_identifier.index = block.block_identifier.index + 1;
-            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
+            update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
             let next = cursor.pick_next(
                 cursed,
                 block.block_identifier.index + 1,
@@ -1024,11 +1026,11 @@ mod test {
         fn resets_on_previous_block() {
             let ctx = Context::empty();
             let config = Config::test_default();
-            drop_databases(&config);
-            let db_conns = initialize_databases(&config, &ctx);
+            drop_sqlite_dbs(&config);
+            let db_conns = initialize_sqlite_dbs(&config, &ctx);
             let block = new_test_block(vec![new_test_reveal_tx_with_operation()]);
-            update_sequence_metadata_with_block(&block, &db_conns.ordhook, &ctx);
-            let mut cursor = SequenceCursor::new(&db_conns.ordhook);
+            update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
+            let mut cursor = SequenceCursor::new(&db_conns.ordinals);
             let _ = cursor.pick_next(
                 false,
                 block.block_identifier.index + 1,

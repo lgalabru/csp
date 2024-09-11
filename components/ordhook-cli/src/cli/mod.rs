@@ -16,9 +16,7 @@ use ordhook::chainhook_sdk::types::{BitcoinBlockData, TransactionIdentifier};
 use ordhook::chainhook_sdk::utils::BlockHeights;
 use ordhook::chainhook_sdk::utils::Context;
 use ordhook::config::Config;
-use ordhook::core::meta_protocols::brc20::db::{
-    brc20_new_rw_db_conn, get_brc20_operations_on_block,
-};
+use ordhook::core::meta_protocols::brc20::db::get_brc20_operations_on_block;
 use ordhook::core::pipeline::download_and_pipeline_blocks;
 use ordhook::core::pipeline::processors::block_archiving::start_block_archiving_processor;
 use ordhook::core::pipeline::processors::start_inscription_indexing_processor;
@@ -32,17 +30,16 @@ use ordhook::db::blocks::{
 use ordhook::db::cursor::BlockBytesCursor;
 use ordhook::db::ordinals::{
     find_all_inscriptions_in_block, find_all_transfers_in_block, find_inscription_with_id,
-    find_latest_inscription_block_height, get_default_ordhook_db_file_path,
-    open_readonly_ordhook_db_conn,
+    find_latest_inscription_block_height, get_default_ordinals_db_file_path, open_ordinals_db,
 };
-use ordhook::db::{delete_data_in_ordhook_db, open_readwrite_ordhook_dbs};
+use ordhook::db::{drop_block_data_from_all_dbs, initialize_sqlite_dbs, open_all_dbs_rw};
 use ordhook::download::download_archive_datasets_if_required;
 use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;
 use ordhook::service::observers::initialize_observers_db;
 use ordhook::service::{start_observer_forwarding, Service};
 use ordhook::utils::bitcoind::bitcoind_get_block_height;
 use ordhook::utils::monitoring::PrometheusMonitoring;
-use ordhook::{hex, initialize_databases, try_error, try_info, try_warn};
+use ordhook::{hex, try_error, try_info, try_warn};
 use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use std::io::{BufReader, Read};
@@ -598,12 +595,15 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let mut total_inscriptions = 0;
                 let mut total_transfers = 0;
 
-                let db_connections = initialize_databases(&config, ctx);
+                let db_connections = initialize_sqlite_dbs(&config, ctx);
                 while let Some(block_height) = block_range.pop_front() {
-                    let inscriptions =
-                        find_all_inscriptions_in_block(&block_height, &db_connections.ordhook, ctx);
+                    let inscriptions = find_all_inscriptions_in_block(
+                        &block_height,
+                        &db_connections.ordinals,
+                        ctx,
+                    );
                     let locations =
-                        find_all_transfers_in_block(&block_height, &db_connections.ordhook, ctx);
+                        find_all_transfers_in_block(&block_height, &db_connections.ordinals, ctx);
 
                     let mut total_transfers_in_block = 0;
 
@@ -657,7 +657,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 }
                 if total_transfers == 0 && total_inscriptions == 0 {
                     let db_file_path =
-                        get_default_ordhook_db_file_path(&config.expected_cache_path());
+                        get_default_ordinals_db_file_path(&config.expected_cache_path());
                     try_warn!(ctx, "No data available. Check the validity of the range being scanned and the validity of your local database {}", db_file_path.display());
                 }
             }
@@ -673,8 +673,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
 
             let _ = download_archive_datasets_if_required(&config, ctx).await;
 
-            let inscriptions_db_conn =
-                open_readonly_ordhook_db_conn(&config.expected_cache_path(), ctx)?;
+            let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), ctx)?;
             let (inscription, block_height) =
                 match find_inscription_with_id(&cmd.inscription_id, &inscriptions_db_conn, ctx)? {
                     Some(entry) => entry,
@@ -742,10 +741,10 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                     &cmd.config_path,
                     &None,
                 )?;
-                let db_connections = initialize_databases(&config, ctx);
+                let db_connections = initialize_sqlite_dbs(&config, ctx);
 
                 let last_known_block =
-                    find_latest_inscription_block_height(&db_connections.ordhook, ctx)?;
+                    find_latest_inscription_block_height(&db_connections.ordinals, ctx)?;
                 if last_known_block.is_none() {
                     open_blocks_db_with_retry(true, &config, ctx);
                 }
@@ -808,12 +807,12 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
         Command::Db(OrdhookDbCommand::New(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             // Create DB
-            initialize_databases(&config, ctx);
+            initialize_sqlite_dbs(&config, ctx);
             open_blocks_db_with_retry(true, &config, ctx);
         }
         Command::Db(OrdhookDbCommand::Sync(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-            initialize_databases(&config, ctx);
+            initialize_sqlite_dbs(&config, ctx);
             let service = Service::new(config, ctx.clone());
             service.update_state(None).await?;
         }
@@ -928,16 +927,13 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 return Err("Deletion aborted".to_string());
             }
 
-            let (blocks_db_rw, inscriptions_db_conn_rw) =
-                open_readwrite_ordhook_dbs(&config, &ctx)?;
-            let brc_20_db_conn_rw = brc20_new_rw_db_conn(&config, ctx);
+            let (blocks_db_rw, sqlite_dbs_rw) = open_all_dbs_rw(&config, &ctx)?;
 
-            delete_data_in_ordhook_db(
+            drop_block_data_from_all_dbs(
                 cmd.start_block,
                 cmd.end_block,
-                &inscriptions_db_conn_rw,
                 &blocks_db_rw,
-                &brc_20_db_conn_rw,
+                &sqlite_dbs_rw,
                 ctx,
             )?;
             info!(

@@ -27,32 +27,26 @@ use crate::{
     },
 };
 
-pub fn get_default_ordhook_db_file_path(base_dir: &PathBuf) -> PathBuf {
+pub fn get_default_ordinals_db_file_path(base_dir: &PathBuf) -> PathBuf {
     let mut destination_path = base_dir.clone();
     destination_path.push("hord.sqlite");
     destination_path
 }
 
-pub fn open_readonly_ordhook_db_conn(
-    base_dir: &PathBuf,
-    ctx: &Context,
-) -> Result<Connection, String> {
-    let path = get_default_ordhook_db_file_path(&base_dir);
+pub fn open_ordinals_db(base_dir: &PathBuf, ctx: &Context) -> Result<Connection, String> {
+    let path = get_default_ordinals_db_file_path(&base_dir);
     let conn = open_existing_readonly_db(&path, ctx);
     Ok(conn)
 }
 
-pub fn open_readwrite_ordhook_db_conn(
-    base_dir: &PathBuf,
-    ctx: &Context,
-) -> Result<Connection, String> {
-    let db_path = get_default_ordhook_db_file_path(&base_dir);
+pub fn open_ordinals_db_rw(base_dir: &PathBuf, ctx: &Context) -> Result<Connection, String> {
+    let db_path = get_default_ordinals_db_file_path(&base_dir);
     let conn = create_or_open_readwrite_db(Some(&db_path), ctx);
     Ok(conn)
 }
 
-pub fn initialize_ordhook_db(base_dir: &PathBuf, ctx: &Context) -> Connection {
-    let db_path = get_default_ordhook_db_file_path(&base_dir);
+pub fn initialize_ordinals_db(base_dir: &PathBuf, ctx: &Context) -> Connection {
+    let db_path = get_default_ordinals_db_file_path(&base_dir);
     let conn = create_or_open_readwrite_db(Some(&db_path), ctx);
     // TODO: introduce initial output
     if let Err(e) = conn.execute(

@@ -16,7 +16,7 @@ use crate::{
         },
     },
     db::ordinals::{
-        insert_entries_from_block_in_inscriptions, open_readwrite_ordhook_db_conn,
+        insert_entries_from_block_in_inscriptions, open_ordinals_db_rw,
         remove_entries_from_locations_at_block_height,
     },
     try_info, try_warn,
@@ -35,7 +35,7 @@ pub fn start_transfers_recomputing_processor(
     let handle: JoinHandle<()> = hiro_system_kit::thread_named("Inscription indexing runloop")
         .spawn(move || {
             let mut inscriptions_db_conn_rw =
-                open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx).unwrap();
+                open_ordinals_db_rw(&config.expected_cache_path(), &ctx).unwrap();
             let mut empty_cycles = 0;
 
             loop {

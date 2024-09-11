@@ -43,7 +43,7 @@ use crate::{
         cursor::TransactionBytesCursor,
         ordinals::{
             get_any_entry_in_ordinal_activities, get_latest_indexed_inscription_number,
-            open_readonly_ordhook_db_conn, open_readwrite_ordhook_db_conn,
+            open_ordinals_db, open_ordinals_db_rw,
         },
     },
     service::write_brc20_block_operations,
@@ -78,11 +78,11 @@ pub fn start_inscription_indexing_processor(
             let mut garbage_collect_nth_block = 0;
 
             let mut inscriptions_db_conn_rw =
-                open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx).unwrap();
+                open_ordinals_db_rw(&config.expected_cache_path(), &ctx).unwrap();
             let mut empty_cycles = 0;
 
             let inscriptions_db_conn =
-                open_readonly_ordhook_db_conn(&config.expected_cache_path(), &ctx).unwrap();
+                open_ordinals_db(&config.expected_cache_path(), &ctx).unwrap();
             let mut sequence_cursor = SequenceCursor::new(&inscriptions_db_conn);
 
             let mut brc20_cache = brc20_new_cache(&config);
@@ -154,8 +154,7 @@ pub fn start_inscription_indexing_processor(
 
                     // Recreate sqlite db connection on a regular basis
                     inscriptions_db_conn_rw =
-                        open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx)
-                            .unwrap();
+                        open_ordinals_db_rw(&config.expected_cache_path(), &ctx).unwrap();
                     inscriptions_db_conn_rw.flush_prepared_statement_cache();
                     garbage_collect_nth_block = 0;
                 }
@@ -353,8 +352,10 @@ mod test {
             meta_protocols::brc20::cache::brc20_new_cache, new_traversals_lazy_cache,
             protocol::inscription_sequencing::SequenceCursor,
         },
-        db::{blocks::open_blocks_db_with_retry, ordinals::open_readwrite_ordhook_db_conn},
-        drop_databases, initialize_databases,
+        db::{
+            blocks::open_blocks_db_with_retry, drop_sqlite_dbs, initialize_sqlite_dbs,
+            ordinals::open_ordinals_db_rw,
+        },
         utils::{
             monitoring::PrometheusMonitoring,
             test_helpers::{new_test_block, new_test_reveal_tx},
@@ -369,15 +370,17 @@ mod test {
         let config = Config::test_default();
 
         // Create DBs
-        drop_databases(&config);
-        let db_conns = initialize_databases(&config, &ctx);
+        drop_sqlite_dbs(&config);
+        let db_conns = initialize_sqlite_dbs(&config, &ctx);
         let _ = open_blocks_db_with_retry(true, &config, &ctx);
 
+        // Insert block into rocksdb
+
         let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
-        let mut sequence_cursor = SequenceCursor::new(&db_conns.ordhook);
+        let mut sequence_cursor = SequenceCursor::new(&db_conns.ordinals);
         let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
         let mut inscriptions_db_conn_rw =
-            open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx).expect("");
+            open_ordinals_db_rw(&config.expected_cache_path(), &ctx).expect("");
 
         let results = process_blocks(
             &mut next_blocks,
@@ -416,13 +419,13 @@ mod test {
         let mut config = Config::mainnet_default();
         config.storage.working_dir = "tmp".to_string();
         config.meta_protocols.brc20 = true;
-        drop_databases(&config);
-        let mut db_conns = initialize_databases(&config, &ctx);
+        drop_sqlite_dbs(&config);
+        let mut db_conns = initialize_sqlite_dbs(&config, &ctx);
         let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
-        let mut sequence_cursor = SequenceCursor::new(&db_conns.ordhook);
+        let mut sequence_cursor = SequenceCursor::new(&db_conns.ordinals);
         let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
         let mut inscriptions_db_conn_rw =
-            open_readwrite_ordhook_db_conn(&config.expected_cache_path(), &ctx).expect("");
+            open_ordinals_db_rw(&config.expected_cache_path(), &ctx).expect("");
         let mut brc20_cache = brc20_new_cache(&config);
 
         let _ = process_blocks(

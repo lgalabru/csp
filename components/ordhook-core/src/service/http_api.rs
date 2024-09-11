@@ -11,7 +11,7 @@ use chainhook_sdk::{
     utils::Context,
 };
 use rocket::{
-    config::{self, Config, LogLevel},
+    config::{self, Config as RocketConfig, LogLevel},
     Ignite, Rocket, Shutdown,
 };
 use rocket::{
@@ -22,7 +22,7 @@ use rocket::{
 use rocket::{response::status::Custom, State};
 
 use crate::{
-    config::PredicatesApi,
+    config::{Config, PredicatesApi},
     service::observers::{
         insert_entry_in_observers, open_readwrite_observers_db_conn, remove_entry_from_observers,
         update_observer_progress, update_observer_streaming_enabled,
@@ -36,7 +36,7 @@ use super::observers::{
 };
 
 pub async fn start_observers_http_server(
-    config: &crate::Config,
+    config: &Config,
     observer_commands_tx: &std::sync::mpsc::Sender<ObserverCommand>,
     observer_event_rx: crossbeam_channel::Receiver<ObserverEvent>,
     bitcoin_scan_op_tx: crossbeam_channel::Sender<BitcoinChainhookSpecification>,
@@ -147,7 +147,7 @@ pub async fn start_observers_http_server(
 }
 
 async fn build_server(
-    config: &crate::Config,
+    config: &Config,
     observer_command_tx: &std::sync::mpsc::Sender<ObserverCommand>,
     ctx: &Context,
 ) -> Rocket<Ignite> {
@@ -166,7 +166,7 @@ async fn build_server(
     shutdown_config.ctrlc = false;
     shutdown_config.grace = 1;
     shutdown_config.mercy = 1;
-    let control_config = Config {
+    let control_config = RocketConfig {
         port: api_config.http_port,
         workers: 1,
         address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
@@ -175,7 +175,7 @@ async fn build_server(
         log_level: LogLevel::Off,
         cli_colors: false,
         shutdown: shutdown_config,
-        ..Config::default()
+        ..RocketConfig::default()
     };
     let routes = routes![
         handle_ping,
@@ -208,7 +208,7 @@ fn handle_ping(ctx: &State<Context>) -> Json<Value> {
 
 #[get("/v1/observers", format = "application/json")]
 fn handle_get_predicates(
-    config: &State<crate::Config>,
+    config: &State<Config>,
     ctx: &State<Context>,
 ) -> Result<Json<Value>, Custom<Json<Value>>> {
     try_info!(ctx, "Handling HTTP GET /v1/observers");
@@ -237,7 +237,7 @@ fn handle_get_predicates(
 #[post("/v1/observers", format = "application/json", data = "<predicate>")]
 fn handle_create_predicate(
     predicate: Json<Value>,
-    config: &State<crate::Config>,
+    config: &State<Config>,
     background_job_tx: &State<Arc<Mutex<Sender<ObserverCommand>>>>,
     ctx: &State<Context>,
 ) -> Result<Json<Value>, Custom<Json<Value>>> {
@@ -309,7 +309,7 @@ fn handle_create_predicate(
 #[get("/v1/observers/<predicate_uuid>", format = "application/json")]
 fn handle_get_predicate(
     predicate_uuid: String,
-    config: &State<crate::Config>,
+    config: &State<Config>,
     ctx: &State<Context>,
 ) -> Result<Json<Value>, Custom<Json<Value>>> {
     try_info!(ctx, "Handling HTTP GET /v1/observers/{}", predicate_uuid);
@@ -352,7 +352,7 @@ fn handle_get_predicate(
 #[delete("/v1/observers/<predicate_uuid>", format = "application/json")]
 fn handle_delete_bitcoin_predicate(
     predicate_uuid: String,
-    config: &State<crate::Config>,
+    config: &State<Config>,
     background_job_tx: &State<Arc<Mutex<Sender<ObserverCommand>>>>,
     ctx: &State<Context>,
 ) -> Result<Json<Value>, Custom<Json<Value>>> {
