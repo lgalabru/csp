@@ -351,16 +351,17 @@ mod test {
 
     use crate::{
         config::Config,
-        core::{new_traversals_lazy_cache, protocol::inscription_sequencing::SequenceCursor},
+        core::{
+            new_traversals_lazy_cache,
+            protocol::inscription_sequencing::SequenceCursor,
+            test_builders::{TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder},
+        },
         db::{
             blocks::{insert_standardized_block, open_blocks_db_with_retry},
             drop_all_dbs, initialize_sqlite_dbs,
             ordinals::open_ordinals_db_rw,
         },
-        utils::{
-            monitoring::PrometheusMonitoring,
-            test_helpers::{TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder},
-        },
+        utils::monitoring::PrometheusMonitoring,
     };
 
     use super::process_blocks;

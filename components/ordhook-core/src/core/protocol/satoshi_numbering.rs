@@ -308,3 +308,141 @@ pub fn compute_satoshi_number(
         back_track,
     ))
 }
+
+#[cfg(test)]
+mod test {
+    use std::{hash::BuildHasherDefault, sync::Arc};
+
+    use chainhook_sdk::{
+        types::{BlockIdentifier, TransactionIdentifier},
+        utils::Context,
+    };
+    use dashmap::DashMap;
+    use fxhash::FxHasher;
+
+    use crate::{
+        config::Config,
+        core::{
+            new_traversals_lazy_cache,
+            test_builders::{TestBlockBuilder, TestTransactionBuilder},
+        },
+        db::{
+            blocks::{insert_standardized_block, open_blocks_db_with_retry},
+            cursor::{TransactionBytesCursor, TransactionInputBytesCursor},
+            drop_all_dbs,
+        },
+    };
+
+    use super::compute_satoshi_number;
+
+    fn store_tx_in_traversals_cache(
+        cache: &DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>,
+        block_height: u64,
+        block_hash: String,
+        tx_hash: String,
+        input_tx_hash: String,
+        input_value: u64,
+        output_value: u64,
+    ) {
+        let block_identifier = BlockIdentifier {
+            index: block_height,
+            hash: block_hash,
+        };
+        let transaction_identifier = TransactionIdentifier {
+            hash: tx_hash.clone(),
+        };
+        let txid = transaction_identifier.get_8_hash_bytes();
+        cache.insert(
+            (block_identifier.index as u32, txid.clone()),
+            TransactionBytesCursor {
+                txid,
+                inputs: vec![TransactionInputBytesCursor {
+                    txin: (TransactionIdentifier {
+                        hash: input_tx_hash,
+                    })
+                    .get_8_hash_bytes(),
+                    block_height: (block_height - 1) as u32,
+                    vout: 0,
+                    txin_value: input_value,
+                }],
+                outputs: vec![output_value],
+            },
+        );
+    }
+
+    #[test]
+    fn compute_sat_with_cached_traversals() {
+        let ctx = Context::empty();
+        let config = Config::test_default();
+        drop_all_dbs(&config);
+        let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
+        let cache = new_traversals_lazy_cache(100);
+
+        // Make cache contain the tx input trace (850000 -> 849999 -> 849998) so it doesn't have to visit rocksdb in every step.
+        store_tx_in_traversals_cache(
+            &cache,
+            850000,
+            "0x00000000000000000002a0b5db2a7f8d9087464c2586b546be7bce8eb53b8187".to_string(),
+            "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9".to_string(),
+            "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac".to_string(),
+            9_000,
+            8_000,
+        );
+        store_tx_in_traversals_cache(
+            &cache,
+            849999,
+            "0x000000000000000000026b072f9347d86942f6786dd1fc362acfd9522715b313".to_string(),
+            "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac".to_string(),
+            "0xa077643d3411362c9f75377a832aee6666c73b4358ebccf98f6dad82e57bbe1c".to_string(),
+            10_000,
+            9_000,
+        );
+        // Store the sat coinbase block only (849998), it's the only one we need to access from blocks DB.
+        insert_standardized_block(
+            &TestBlockBuilder::new()
+                .height(849998)
+                .hash(
+                    "0x00000000000000000000ec8da633f1fb0f8f281e43c52e5702139fac4f91204a"
+                        .to_string(),
+                )
+                .add_transaction(
+                    TestTransactionBuilder::new()
+                        .hash(
+                            "0xa077643d3411362c9f75377a832aee6666c73b4358ebccf98f6dad82e57bbe1c"
+                                .to_string(),
+                        )
+                        .build(),
+                )
+                .build(),
+            &blocks_db,
+            &ctx,
+        );
+
+        let block_identifier = BlockIdentifier {
+            index: 850000,
+            hash: "0x00000000000000000002a0b5db2a7f8d9087464c2586b546be7bce8eb53b8187".to_string(),
+        };
+        let transaction_identifier = TransactionIdentifier {
+            hash: "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9".to_string(),
+        };
+        let Ok((result, pointer, _)) = compute_satoshi_number(
+            &block_identifier,
+            &transaction_identifier,
+            0,
+            8_000,
+            &Arc::new(cache),
+            &config,
+            &ctx,
+        ) else {
+            panic!();
+        };
+
+        assert_eq!(result.ordinal_number, 1971874375008000);
+        assert_eq!(result.transfers, 2);
+        assert_eq!(
+            result.transaction_identifier_inscription.hash,
+            "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9".to_string()
+        );
+        assert_eq!(pointer, 8000);
+    }
+}

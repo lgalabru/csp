@@ -980,10 +980,10 @@ mod test {
         use crate::{
             config::Config,
             core::protocol::inscription_sequencing::SequenceCursor,
+            core::test_builders::{TestBlockBuilder, TestTransactionBuilder},
             db::{
                 drop_all_dbs, initialize_sqlite_dbs, ordinals::update_sequence_metadata_with_block,
             },
-            utils::test_helpers::{TestBlockBuilder, TestTransactionBuilder},
         };
 
         #[test_case((780000, false) => (2, 2); "with blessed pre jubilee")]

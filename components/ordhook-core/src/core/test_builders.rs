@@ -1,6 +1,7 @@
 use chainhook_sdk::types::{
-    bitcoin::{OutPoint, TxIn, TxOut}, BitcoinBlockData, BitcoinBlockMetadata, BitcoinNetwork,
-    BitcoinTransactionData, BitcoinTransactionMetadata, BlockIdentifier, OrdinalInscriptionNumber,
+    bitcoin::{OutPoint, TxIn, TxOut},
+    BitcoinBlockData, BitcoinBlockMetadata, BitcoinNetwork, BitcoinTransactionData,
+    BitcoinTransactionMetadata, BlockIdentifier, OrdinalInscriptionNumber,
     OrdinalInscriptionRevealData, OrdinalOperation, TransactionIdentifier,
 };
 
@@ -163,7 +164,8 @@ impl TestTxInBuilder {
     pub fn new() -> Self {
         TestTxInBuilder {
             prev_out_block_height: 849999,
-            prev_out_tx_hash: "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac".to_string(),
+            prev_out_tx_hash: "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac"
+                .to_string(),
         }
     }
 

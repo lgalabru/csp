@@ -1,6 +1,8 @@
 pub mod meta_protocols;
 pub mod pipeline;
 pub mod protocol;
+#[cfg(test)]
+pub mod test_builders;
 
 use dashmap::DashMap;
 use fxhash::{FxBuildHasher, FxHasher};

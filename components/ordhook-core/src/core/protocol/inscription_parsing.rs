@@ -265,7 +265,7 @@ mod test {
 
     use crate::{
         config::Config,
-        utils::test_helpers::{TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder},
+        core::test_builders::{TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder},
     };
 
     use super::{
