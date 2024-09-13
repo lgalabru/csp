@@ -204,3 +204,29 @@ impl TestTxInBuilder {
         }
     }
 }
+
+pub struct TestTxOutBuilder {
+    value: u64,
+    script_pubkey: String,
+}
+
+impl TestTxOutBuilder {
+    pub fn new() -> Self {
+        TestTxOutBuilder {
+            value: 5_000,
+            script_pubkey: "0x00146aa45f66b73dab2bfbe02f2062a7249204479f85".to_string(),
+        }
+    }
+
+    pub fn value(mut self, value: u64) -> Self {
+        self.value = value;
+        self
+    }
+
+    pub fn build(self) -> TxOut {
+        TxOut {
+            value: self.value,
+            script_pubkey: self.script_pubkey,
+        }
+    }
+}
