@@ -158,6 +158,7 @@ impl TestTransactionBuilder {
 pub struct TestTxInBuilder {
     prev_out_block_height: u64,
     prev_out_tx_hash: String,
+    value: u64,
 }
 
 impl TestTxInBuilder {
@@ -166,6 +167,7 @@ impl TestTxInBuilder {
             prev_out_block_height: 849999,
             prev_out_tx_hash: "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac"
                 .to_string(),
+            value: 10000,
         }
     }
 
@@ -179,12 +181,17 @@ impl TestTxInBuilder {
         self
     }
 
+    pub fn value(mut self, value: u64) -> Self {
+        self.value = value;
+        self
+    }
+
     pub fn build(self) -> TxIn {
         TxIn {
             previous_output: OutPoint {
                 txid: TransactionIdentifier { hash: self.prev_out_tx_hash },
                 vout: 0,
-                value: 10000,
+                value: self.value,
                 block_height: self.prev_out_block_height,
             },
             script_sig: "".to_string(),
