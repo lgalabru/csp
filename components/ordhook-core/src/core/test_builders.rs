@@ -223,6 +223,11 @@ impl TestTxOutBuilder {
         self
     }
 
+    pub fn script_pubkey(mut self, script_pubkey: String) -> Self {
+        self.script_pubkey = script_pubkey;
+        self
+    }
+
     pub fn build(self) -> TxOut {
         TxOut {
             value: self.value,

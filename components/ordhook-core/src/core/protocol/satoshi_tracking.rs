@@ -267,7 +267,6 @@ mod test {
     #[test]
     fn computes_satpoint_spent_as_fee() {
         let ctx = Context::empty();
-
         let tx = &TestTransactionBuilder::new()
             .add_input(TestTxInBuilder::new().value(10_000).build())
             .add_output(TestTxOutBuilder::new().value(2_000).build())
@@ -275,7 +274,6 @@ mod test {
         let coinbase_tx = &TestTransactionBuilder::new()
             .add_output(TestTxOutBuilder::new().value(312_500_000 + 5_000).build())
             .build();
-        let mut cumulated_fees = 0;
 
         let (destination, satpoint, value) = compute_satpoint_post_transfer(
             tx,
@@ -285,7 +283,7 @@ mod test {
             &Network::Bitcoin,
             coinbase_tx,
             312_500_000,
-            &mut cumulated_fees,
+            &mut 0,
             &ctx,
         );
 
@@ -299,5 +297,44 @@ mod test {
                 .to_string()
         );
         assert_eq!(value, None);
+    }
+
+    #[test]
+    fn computes_satpoint_for_op_return() {
+        let ctx = Context::empty();
+        let tx = &TestTransactionBuilder::new()
+            .add_input(TestTxInBuilder::new().value(10_000).build())
+            .add_output(
+                TestTxOutBuilder::new()
+                .value(9_000)
+                // OP_RETURN
+                .script_pubkey("0x6a24aa21a9edd3ce297baa3ee8fd96ecd7613f2743552e2f91ed4864540cf059835ff5b35cff".to_string())
+                .build()
+            )
+            .build();
+        let coinbase_tx = &TestTransactionBuilder::new()
+            .add_output(TestTxOutBuilder::new().value(312_500_000).build())
+            .build();
+
+        let (destination, satpoint, value) = compute_satpoint_post_transfer(
+            tx,
+            0,
+            5_000,
+            &Network::Bitcoin,
+            coinbase_tx,
+            312_500_000,
+            &mut 0,
+            &ctx,
+        );
+
+        assert_eq!(
+            destination,
+            OrdinalInscriptionTransferDestination::Burnt("OP_RETURN OP_PUSHBYTES_36 aa21a9edd3ce297baa3ee8fd96ecd7613f2743552e2f91ed4864540cf059835ff5b35cff".to_string())
+        );
+        assert_eq!(
+            satpoint,
+            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0:5000".to_string()
+        );
+        assert_eq!(value, Some(9000));
     }
 }
