@@ -345,7 +345,7 @@ mod test {
     use std::sync::Arc;
 
     use chainhook_sdk::{
-        types::{bitcoin::TxOut, OrdinalOperation},
+        types::{bitcoin::TxOut, OrdinalInscriptionTransferDestination, OrdinalOperation},
         utils::Context,
     };
 
@@ -367,73 +367,82 @@ mod test {
     use super::process_blocks;
 
     #[test]
-    fn process_block_with_inscription_reveal() {
+    fn process_inscription_reveal_and_transfer() {
         let ctx = Context::empty();
         let config = Config::test_default();
         drop_all_dbs(&config);
         let sqlite_dbs = initialize_sqlite_dbs(&config, &ctx);
+        let mut scan_conn = open_ordinals_db_rw(&config.expected_cache_path(), &ctx).expect("");
         let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
+        let mut sequence_cursor = SequenceCursor::new(&sqlite_dbs.ordinals);
+        let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
+        let prometheus = PrometheusMonitoring::new();
 
         // Block 0: A coinbase tx generating the inscription sat.
-        let coinbase0 = TestTransactionBuilder::new()
-            .hash("0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac".to_string())
-            .build();
         let block0 = TestBlockBuilder::new()
             .hash("0x00000000000000000001b228f9faca9e7d11fcecff9d463bd05546ff0aa4651a".to_string())
             .height(849999)
-            .add_transaction(coinbase0)
-            .build();
-        insert_standardized_block(&block0, &blocks_db, &ctx);
-
-        // Block 1: The actual inscription.
-        let coinbase1 = TestTransactionBuilder::new().build();
-        let tx1 = TestTransactionBuilder::new()
-            .hash("0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9".to_string())
-            .add_input(
-                TestTxInBuilder::new()
-                    .prev_out_block_height(849999)
-                    .prev_out_tx_hash(
+            .add_transaction(
+                TestTransactionBuilder::new()
+                    .hash(
                         "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac"
                             .to_string(),
                     )
                     .build(),
             )
-            .add_output(TxOut {
-                value: 10000,
-                script_pubkey: "0x00145e5f0d045e441bf001584eaeca6cd84da04b1084".to_string(),
-            })
             .build();
+        insert_standardized_block(&block0, &blocks_db, &ctx);
+
+        // Block 1: The actual inscription.
         let block1 = TestBlockBuilder::new()
             .hash("0xb61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string())
             .height(850000)
-            .add_transaction(coinbase1)
-            .add_transaction(tx1)
+            .add_transaction(TestTransactionBuilder::new().build())
+            .add_transaction(
+                TestTransactionBuilder::new()
+                    .hash("0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9".to_string())
+                    .add_input(
+                        TestTxInBuilder::new()
+                            .prev_out_block_height(849999)
+                            .prev_out_tx_hash(
+                                "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac"
+                                    .to_string(),
+                            )
+                            .value(12_000)
+                            .witness(vec![
+                                "0x6c00eb3c4d35fedd257051333b4ca81d1a25a37a9af4891f1fec2869edd56b14180eafbda8851d63138a724c9b15384bc5f0536de658bd294d426a36212e6f08".to_string(),
+                                "0x209e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004c5e7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d68".to_string(),
+                                "0xc19e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746".to_string(),
+                            ])
+                            .build(),
+                    )
+                    .add_output(TxOut {
+                        value: 10_000,
+                        script_pubkey: "0x00145e5f0d045e441bf001584eaeca6cd84da04b1084".to_string(),
+                    })
+                    .build()
+            )
             .build();
         insert_standardized_block(&block1, &blocks_db, &ctx);
 
-        let mut next_blocks = vec![block1];
-        let mut sequence_cursor = SequenceCursor::new(&sqlite_dbs.ordinals);
-        let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
-
-        let results = process_blocks(
-            &mut next_blocks,
+        let results1 = process_blocks(
+            &mut vec![block1],
             &mut sequence_cursor,
             &cache_l2,
-            &mut open_ordinals_db_rw(&config.expected_cache_path(), &ctx).expect(""),
+            &mut scan_conn,
             &mut None,
             &mut None,
             &None,
-            &PrometheusMonitoring::new(),
+            &prometheus,
             &config,
             &ctx,
         );
-
-        let result_tx = &results[0].transactions[1];
-        assert_eq!(result_tx.metadata.ordinal_operations.len(), 1);
+        let result_tx_1 = &results1[0].transactions[1];
+        assert_eq!(result_tx_1.metadata.ordinal_operations.len(), 1);
         let OrdinalOperation::InscriptionRevealed(reveal) =
-            &result_tx.metadata.ordinal_operations[0]
+            &result_tx_1.metadata.ordinal_operations[0]
         else {
-            panic!();
+            unreachable!();
         };
         assert_eq!(
             reveal.inscription_id,
@@ -453,37 +462,70 @@ mod test {
             reveal.satpoint_post_inscription,
             "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9:0:0".to_string()
         );
+
+        // Block 2: Inscription transfer
+        let block2 = TestBlockBuilder::new()
+            .hash("0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e".to_string())
+            .height(850001)
+            .add_transaction(TestTransactionBuilder::new().build())
+            .add_transaction(
+                TestTransactionBuilder::new()
+                    .hash("0x1b65c7494c7d1200416a81e65e1dd6bee8d5d4276128458df43692dcb21f49f5".to_string())
+                    .add_input(
+                        TestTxInBuilder::new()
+                            .prev_out_block_height(850000)
+                            .prev_out_tx_hash(
+                                "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9"
+                                    .to_string(),
+                            )
+                            .value(10_000)
+                            .build(),
+                    )
+                    .add_output(TxOut {
+                        value: 8000,
+                        script_pubkey: "0x00145e5f0d045e441bf001584eaeca6cd84da04b1084".to_string(),
+                    })
+                    .build()
+            )
+            .build();
+        insert_standardized_block(&block2, &blocks_db, &ctx);
+
+        let results2 = process_blocks(
+            &mut vec![block2],
+            &mut sequence_cursor,
+            &cache_l2,
+            &mut scan_conn,
+            &mut None,
+            &mut None,
+            &None,
+            &prometheus,
+            &config,
+            &ctx,
+        );
+        let result_tx_2 = &results2[0].transactions[1];
+        assert_eq!(result_tx_2.metadata.ordinal_operations.len(), 1);
+        let OrdinalOperation::InscriptionTransferred(transfer) =
+            &result_tx_2.metadata.ordinal_operations[0]
+        else {
+            unreachable!();
+        };
+        let OrdinalInscriptionTransferDestination::Transferred(destination) = &transfer.destination
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            destination.to_string(),
+            "bc1qte0s6pz7gsdlqq2cf6hv5mxcfksykyyyjkdfd5".to_string()
+        );
+        assert_eq!(transfer.ordinal_number, 1971874687500000);
+        assert_eq!(
+            transfer.satpoint_pre_transfer,
+            "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9:0:0".to_string()
+        );
+        assert_eq!(
+            transfer.satpoint_post_transfer,
+            "1b65c7494c7d1200416a81e65e1dd6bee8d5d4276128458df43692dcb21f49f5:0:0".to_string()
+        );
+        assert_eq!(transfer.post_transfer_output_value, Some(8000));
     }
-
-    // #[test]
-    // fn process_block_with_brc20_inscription() {
-    //     let ctx = Context::empty();
-    //     let mut config = Config::mainnet_default();
-    //     config.storage.working_dir = "tmp".to_string();
-    //     config.meta_protocols.brc20 = true;
-    //     drop_sqlite_dbs(&config);
-    //     let mut db_conns = initialize_sqlite_dbs(&config, &ctx);
-    //     let mut next_blocks = vec![new_test_block(vec![new_test_reveal_tx()])];
-    //     let mut sequence_cursor = SequenceCursor::new(&db_conns.ordinals);
-    //     let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
-    //     let mut inscriptions_db_conn_rw =
-    //         open_ordinals_db_rw(&config.expected_cache_path(), &ctx).expect("");
-    //     let mut brc20_cache = brc20_new_cache(&config);
-
-    //     let _ = process_blocks(
-    //         &mut next_blocks,
-    //         &mut sequence_cursor,
-    //         &cache_l2,
-    //         &mut inscriptions_db_conn_rw,
-    //         &mut brc20_cache,
-    //         &mut db_conns.brc20,
-    //         &None,
-    //         &PrometheusMonitoring::new(),
-    //         &config,
-    //         &ctx,
-    //     );
-
-    //     // let op = get_brc20_operations_on_block(838964, &db_conns.brc20.unwrap(), &ctx);
-    //     // assert_eq!(op.len(), 1);
-    // }
 }
