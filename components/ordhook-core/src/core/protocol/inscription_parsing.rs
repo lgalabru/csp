@@ -353,7 +353,15 @@ mod test {
         let mut block = TestBlockBuilder::new()
             .add_transaction(
                 TestTransactionBuilder::new()
-                    .add_input(TestTxInBuilder::new().build())
+                    .add_input(
+                        TestTxInBuilder::new()
+                            .witness(vec![
+                                "0x6c00eb3c4d35fedd257051333b4ca81d1a25a37a9af4891f1fec2869edd56b14180eafbda8851d63138a724c9b15384bc5f0536de658bd294d426a36212e6f08".to_string(),
+                                "0x209e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004c5e7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d68".to_string(),
+                                "0xc19e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746".to_string(),
+                            ])
+                            .build()
+                    )
                     .build(),
             )
             .build();
