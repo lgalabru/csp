@@ -967,9 +967,107 @@ pub fn consolidate_block_with_pre_computed_ordinals_data(
 
 #[cfg(test)]
 mod test {
+    use chainhook_sdk::{
+        types::{
+            BlockIdentifier, OrdinalInscriptionNumber, OrdinalInscriptionRevealData,
+            OrdinalOperation,
+        },
+        utils::Context,
+    };
+
+    use crate::{
+        config::Config,
+        core::test_builders::{
+            TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder, TestTxOutBuilder,
+        },
+        db::{drop_all_dbs, initialize_sqlite_dbs, ordinals::insert_entry_in_inscriptions},
+    };
+
+    use super::consolidate_block_with_pre_computed_ordinals_data;
+
     #[test]
-    fn augments_block_data() {
-        //
+    fn consolidates_block_with_pre_computed_data() {
+        let ctx = Context::empty();
+        let config = Config::test_default();
+        drop_all_dbs(&config);
+        let mut sqlite_dbs = initialize_sqlite_dbs(&config, &ctx);
+
+        // Prepare DB data. Set blank values because we will fill these out after augmenting.
+        let reveal = OrdinalInscriptionRevealData {
+            content_bytes: "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string(),
+            content_type: "text/plain;charset=utf-8".to_string(),
+            content_length: 94,
+            inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
+            inscription_fee: 0,
+            inscription_output_value: 9000,
+            inscription_id: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0".to_string(),
+            inscription_input_index: 0,
+            inscription_pointer: Some(0),
+            inscriber_address: Some("bc1qte0s6pz7gsdlqq2cf6hv5mxcfksykyyyjkdfd5".to_string()),
+            delegate: None,
+            metaprotocol: None,
+            metadata: None,
+            parent: None,
+            ordinal_number: 1971874687500000,
+            ordinal_block_height: 849999,
+            ordinal_offset: 0,
+            tx_index: 0,
+            transfers_pre_inscription: 0,
+            satpoint_post_inscription: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9:0:0".to_string(),
+            curse_type: None,
+        };
+        insert_entry_in_inscriptions(
+            &reveal,
+            &BlockIdentifier {
+                index: 850000,
+                hash: "0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e"
+                    .to_string(),
+            },
+            &sqlite_dbs.ordinals,
+            &ctx,
+        );
+
+        let mut block = TestBlockBuilder::new()
+            .height(850000)
+            .hash("0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e".to_string())
+            .add_transaction(TestTransactionBuilder::new().build())
+            .add_transaction(
+                TestTransactionBuilder::new()
+                    .hash(
+                        "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9"
+                            .to_string(),
+                    )
+                    .ordinal_operations(vec![OrdinalOperation::InscriptionRevealed(reveal)])
+                    .add_input(TestTxInBuilder::new().build())
+                    .add_output(TestTxOutBuilder::new().value(9000).build())
+                    .build(),
+            )
+            .build();
+
+        let inscriptions_db_tx = &sqlite_dbs.ordinals.transaction().unwrap();
+        consolidate_block_with_pre_computed_ordinals_data(
+            &mut block,
+            &inscriptions_db_tx,
+            true,
+            None,
+            &ctx,
+        );
+
+        let OrdinalOperation::InscriptionRevealed(reveal) =
+            &block.transactions[1].metadata.ordinal_operations[0]
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            reveal.inscription_id,
+            "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0"
+        );
+        assert_eq!(reveal.ordinal_offset, 0);
+        assert_eq!(reveal.ordinal_block_height, 849999);
+        assert_eq!(reveal.ordinal_number, 1971874687500000);
+        assert_eq!(reveal.transfers_pre_inscription, 0);
+        assert_eq!(reveal.inscription_fee, 0);
+        assert_eq!(reveal.tx_index, 1);
     }
 
     mod cursor {

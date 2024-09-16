@@ -196,7 +196,9 @@ impl TestTxInBuilder {
     pub fn build(self) -> TxIn {
         TxIn {
             previous_output: OutPoint {
-                txid: TransactionIdentifier { hash: self.prev_out_tx_hash },
+                txid: TransactionIdentifier {
+                    hash: self.prev_out_tx_hash,
+                },
                 vout: 0,
                 value: self.value,
                 block_height: self.prev_out_block_height,
