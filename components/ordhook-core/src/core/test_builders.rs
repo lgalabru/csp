@@ -1,7 +1,7 @@
 use chainhook_sdk::types::{
     bitcoin::{OutPoint, TxIn, TxOut},
     BitcoinBlockData, BitcoinBlockMetadata, BitcoinNetwork, BitcoinTransactionData,
-    BitcoinTransactionMetadata, BlockIdentifier, OrdinalInscriptionNumber,
+    BitcoinTransactionMetadata, BlockIdentifier, Brc20Operation, OrdinalInscriptionNumber,
     OrdinalInscriptionRevealData, OrdinalOperation, TransactionIdentifier,
 };
 
@@ -65,6 +65,7 @@ pub struct TestTransactionBuilder {
     inputs: Vec<TxIn>,
     outputs: Vec<TxOut>,
     ordinal_operations: Vec<OrdinalOperation>,
+    brc20_operation: Option<Brc20Operation>,
 }
 
 impl TestTransactionBuilder {
@@ -74,6 +75,7 @@ impl TestTransactionBuilder {
             ordinal_operations: vec![],
             inputs: vec![],
             outputs: vec![],
+            brc20_operation: None,
         }
     }
 
@@ -137,6 +139,16 @@ impl TestTransactionBuilder {
         self
     }
 
+    pub fn add_ordinal_operation(mut self, ordinal_operation: OrdinalOperation) -> Self {
+        self.ordinal_operations.push(ordinal_operation);
+        self
+    }
+
+    pub fn brc20_operation(mut self, brc20_operation: Option<Brc20Operation>) -> Self {
+        self.brc20_operation = brc20_operation;
+        self
+    }
+
     pub fn build(self) -> BitcoinTransactionData {
         BitcoinTransactionData {
             transaction_identifier: TransactionIdentifier { hash: self.hash },
@@ -146,7 +158,7 @@ impl TestTransactionBuilder {
                 outputs: self.outputs,
                 ordinal_operations: self.ordinal_operations,
                 stacks_operations: vec![],
-                brc20_operation: None,
+                brc20_operation: self.brc20_operation,
                 proof: None,
                 fee: 0,
                 index: 0,

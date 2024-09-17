@@ -616,3 +616,88 @@ pub fn write_augmented_block_to_brc20_db(
     insert_token_rows(&tokens, db_conn, ctx);
     insert_ledger_rows(&ledger_rows, db_conn, ctx);
 }
+
+#[cfg(test)]
+mod test {
+    use chainhook_sdk::{
+        types::{
+            Brc20Operation, Brc20TokenDeployData, OrdinalInscriptionNumber,
+            OrdinalInscriptionRevealData, OrdinalOperation,
+        },
+        utils::Context,
+    };
+
+    use crate::{
+        config::Config,
+        core::test_builders::{TestBlockBuilder, TestTransactionBuilder},
+        db::{drop_all_dbs, initialize_sqlite_dbs},
+    };
+
+    use super::{get_token, write_augmented_block_to_brc20_db};
+
+    #[test]
+    fn writes_augmented_block_to_db() {
+        let ctx = Context::empty();
+        let mut config = Config::test_default();
+        config.meta_protocols.brc20 = true;
+        drop_all_dbs(&config);
+        let sqlite_dbs = initialize_sqlite_dbs(&config, &ctx);
+
+        let block = TestBlockBuilder::new()
+            .hash("0xb61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string())
+            .height(850000)
+            .add_transaction(TestTransactionBuilder::new().build())
+            .add_transaction(
+                TestTransactionBuilder::new()
+                    .hash("0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9".to_string())
+                    .add_ordinal_operation(OrdinalOperation::InscriptionRevealed(OrdinalInscriptionRevealData {
+                        content_bytes: "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string(),
+                        content_type: "text/plain;charset=utf-8".to_string(),
+                        content_length: 94,
+                        inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
+                        inscription_fee: 0,
+                        inscription_output_value: 0,
+                        inscription_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string(),
+                        inscription_input_index: 0,
+                        inscription_pointer: None,
+                        inscriber_address: None,
+                        delegate: None,
+                        metaprotocol: None,
+                        metadata: None,
+                        parent: None,
+                        ordinal_number: 0,
+                        ordinal_block_height: 0,
+                        ordinal_offset: 0,
+                        tx_index: 0,
+                        transfers_pre_inscription: 0,
+                        satpoint_post_inscription: "".to_string(),
+                        curse_type: None,
+                    }))
+                    .brc20_operation(Some(Brc20Operation::Deploy(Brc20TokenDeployData {
+                        tick: "ordi".to_string(), 
+                        max: "21000".to_string(), 
+                        lim: "1000".to_string(), 
+                        dec: "0".to_string(), 
+                        address: "3K9KZZPB8NRwZVP5wNKX4VYhnswrJxpgZ4".to_string(), 
+                        inscription_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string(), 
+                        self_mint: false
+                    })))
+                    .build()
+                )
+            .build();
+        write_augmented_block_to_brc20_db(&block, sqlite_dbs.brc20.as_ref().unwrap(), &ctx);
+
+        let deploy = get_token("ordi", sqlite_dbs.brc20.as_ref().unwrap(), &ctx).unwrap();
+        assert_eq!(
+            deploy.inscription_id,
+            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0"
+        );
+        assert_eq!(deploy.tick, "ordi");
+        assert_eq!(deploy.display_tick, "ordi");
+        assert_eq!(deploy.max, 21000.0);
+        assert_eq!(deploy.lim, 1000.0);
+        assert_eq!(deploy.dec, 0);
+        assert_eq!(deploy.inscription_number, 0);
+        assert_eq!(deploy.address, "3K9KZZPB8NRwZVP5wNKX4VYhnswrJxpgZ4");
+    }
+}

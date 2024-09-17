@@ -105,7 +105,11 @@ mod test {
             pipeline::PostProcessorCommand,
             test_builders::{TestBlockBuilder, TestTransactionBuilder},
         },
-        db::{blocks::{find_block_bytes_at_block_height, open_blocks_db_with_retry}, cursor::BlockBytesCursor, drop_all_dbs, initialize_sqlite_dbs},
+        db::{
+            blocks::{find_block_bytes_at_block_height, open_blocks_db_with_retry},
+            cursor::BlockBytesCursor,
+            drop_all_dbs, initialize_sqlite_dbs,
+        },
     };
 
     use super::start_block_archiving_processor;
