@@ -16,29 +16,30 @@ use ordhook::chainhook_sdk::types::{BitcoinBlockData, TransactionIdentifier};
 use ordhook::chainhook_sdk::utils::BlockHeights;
 use ordhook::chainhook_sdk::utils::Context;
 use ordhook::config::Config;
-use ordhook::core::meta_protocols::brc20::db::{
-    brc20_new_rw_db_conn, get_brc20_operations_on_block,
-};
-use ordhook::core::new_traversals_lazy_cache;
+use ordhook::core::meta_protocols::brc20::db::get_brc20_operations_on_block;
 use ordhook::core::pipeline::download_and_pipeline_blocks;
 use ordhook::core::pipeline::processors::block_archiving::start_block_archiving_processor;
 use ordhook::core::pipeline::processors::start_inscription_indexing_processor;
 use ordhook::core::protocol::inscription_parsing::parse_inscriptions_and_standardize_block;
 use ordhook::core::protocol::satoshi_numbering::compute_satoshi_number;
-use ordhook::db::{
-    delete_data_in_ordhook_db, find_all_inscriptions_in_block, find_all_transfers_in_block,
-    find_block_bytes_at_block_height, find_inscription_with_id, find_last_block_inserted,
-    find_latest_inscription_block_height, find_missing_blocks, get_default_ordhook_db_file_path,
-    open_ordhook_db_conn_rocks_db_loop, open_readonly_ordhook_db_conn,
-    open_readonly_ordhook_db_conn_rocks_db, open_readwrite_ordhook_dbs, BlockBytesCursor,
+use ordhook::core::{first_inscription_height, new_traversals_lazy_cache};
+use ordhook::db::blocks::{
+    find_block_bytes_at_block_height, find_last_block_inserted, find_missing_blocks,
+    open_blocks_db_with_retry, open_readonly_blocks_db,
 };
+use ordhook::db::cursor::BlockBytesCursor;
+use ordhook::db::ordinals::{
+    find_all_inscriptions_in_block, find_all_transfers_in_block, find_inscription_with_id,
+    find_latest_inscription_block_height, get_default_ordinals_db_file_path, open_ordinals_db,
+};
+use ordhook::db::{drop_block_data_from_all_dbs, initialize_sqlite_dbs, open_all_dbs_rw};
 use ordhook::download::download_archive_datasets_if_required;
 use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;
 use ordhook::service::observers::initialize_observers_db;
 use ordhook::service::{start_observer_forwarding, Service};
 use ordhook::utils::bitcoind::bitcoind_get_block_height;
 use ordhook::utils::monitoring::PrometheusMonitoring;
-use ordhook::{hex, initialize_databases, try_error, try_info, try_warn};
+use ordhook::{hex, try_error, try_info, try_warn};
 use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use std::io::{BufReader, Read};
@@ -594,12 +595,15 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let mut total_inscriptions = 0;
                 let mut total_transfers = 0;
 
-                let db_connections = initialize_databases(&config, ctx);
+                let db_connections = initialize_sqlite_dbs(&config, ctx);
                 while let Some(block_height) = block_range.pop_front() {
-                    let inscriptions =
-                        find_all_inscriptions_in_block(&block_height, &db_connections.ordhook, ctx);
+                    let inscriptions = find_all_inscriptions_in_block(
+                        &block_height,
+                        &db_connections.ordinals,
+                        ctx,
+                    );
                     let locations =
-                        find_all_transfers_in_block(&block_height, &db_connections.ordhook, ctx);
+                        find_all_transfers_in_block(&block_height, &db_connections.ordinals, ctx);
 
                     let mut total_transfers_in_block = 0;
 
@@ -653,7 +657,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 }
                 if total_transfers == 0 && total_inscriptions == 0 {
                     let db_file_path =
-                        get_default_ordhook_db_file_path(&config.expected_cache_path());
+                        get_default_ordinals_db_file_path(&config.expected_cache_path());
                     try_warn!(ctx, "No data available. Check the validity of the range being scanned and the validity of your local database {}", db_file_path.display());
                 }
             }
@@ -669,8 +673,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
 
             let _ = download_archive_datasets_if_required(&config, ctx).await;
 
-            let inscriptions_db_conn =
-                open_readonly_ordhook_db_conn(&config.expected_cache_path(), ctx)?;
+            let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), ctx)?;
             let (inscription, block_height) =
                 match find_inscription_with_id(&cmd.inscription_id, &inscriptions_db_conn, ctx)? {
                     Some(entry) => entry,
@@ -708,15 +711,12 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
             let transaction_identifier = TransactionIdentifier::new(&cmd.transaction_id);
             let cache = new_traversals_lazy_cache(100);
             let (res, _, mut back_trace) = compute_satoshi_number(
-                &config.get_ordhook_config().db_path,
                 &block.block_identifier,
                 &transaction_identifier,
                 cmd.input_index,
                 0,
                 &Arc::new(cache),
-                config.resources.ulimit,
-                config.resources.memory_available,
-                true,
+                &config,
                 ctx,
             )?;
             back_trace.reverse();
@@ -741,32 +741,25 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                     &cmd.config_path,
                     &None,
                 )?;
-                let db_connections = initialize_databases(&config, ctx);
+                let db_connections = initialize_sqlite_dbs(&config, ctx);
 
                 let last_known_block =
-                    find_latest_inscription_block_height(&db_connections.ordhook, ctx)?;
+                    find_latest_inscription_block_height(&db_connections.ordinals, ctx)?;
                 if last_known_block.is_none() {
-                    open_ordhook_db_conn_rocks_db_loop(
-                        true,
-                        &config.expected_cache_path(),
-                        config.resources.ulimit,
-                        config.resources.memory_available,
-                        ctx,
-                    );
+                    open_blocks_db_with_retry(true, &config, ctx);
                 }
 
-                let ordhook_config = config.get_ordhook_config();
                 let start_block = match cmd.start_at_block {
                     Some(entry) => entry,
                     None => match last_known_block {
                         Some(entry) => entry,
                         None => {
+                            let first_height = first_inscription_height(&config);
                             warn!(
                                 ctx.expect_logger(),
-                                "Inscription ingestion will start at block #{}",
-                                ordhook_config.first_inscription_height
+                                "Inscription ingestion will start at block #{}", first_height
                             );
-                            ordhook_config.first_inscription_height
+                            first_height
                         }
                     },
                 };
@@ -814,27 +807,20 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
         Command::Db(OrdhookDbCommand::New(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             // Create DB
-            initialize_databases(&config, ctx);
-            open_ordhook_db_conn_rocks_db_loop(
-                true,
-                &config.expected_cache_path(),
-                config.resources.ulimit,
-                config.resources.memory_available,
-                ctx,
-            );
+            initialize_sqlite_dbs(&config, ctx);
+            open_blocks_db_with_retry(true, &config, ctx);
         }
         Command::Db(OrdhookDbCommand::Sync(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-            initialize_databases(&config, ctx);
+            initialize_sqlite_dbs(&config, ctx);
             let service = Service::new(config, ctx.clone());
             service.update_state(None).await?;
         }
         Command::Db(OrdhookDbCommand::Repair(subcmd)) => match subcmd {
             RepairCommand::Blocks(cmd) => {
-                let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-                let mut ordhook_config = config.get_ordhook_config();
+                let mut config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
                 if let Some(network_threads) = cmd.network_threads {
-                    ordhook_config.resources.bitcoind_rpc_threads = network_threads;
+                    config.resources.bitcoind_rpc_threads = network_threads;
                 }
                 let blocks = cmd.get_blocks();
                 let block_ingestion_processor =
@@ -842,20 +828,14 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 download_and_pipeline_blocks(
                     &config,
                     blocks,
-                    ordhook_config.first_inscription_height,
+                    first_inscription_height(&config),
                     Some(&block_ingestion_processor),
                     10_000,
                     ctx,
                 )
                 .await?;
                 if let Some(true) = cmd.debug {
-                    let blocks_db = open_ordhook_db_conn_rocks_db_loop(
-                        false,
-                        &config.get_ordhook_config().db_path,
-                        config.resources.ulimit,
-                        config.resources.memory_available,
-                        ctx,
-                    );
+                    let blocks_db = open_blocks_db_with_retry(false, &config, ctx);
                     for i in cmd.get_blocks().into_iter() {
                         let block_bytes =
                             find_block_bytes_at_block_height(i as u32, 10, &blocks_db, ctx)
@@ -870,10 +850,9 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 }
             }
             RepairCommand::Inscriptions(cmd) => {
-                let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-                let mut ordhook_config = config.get_ordhook_config();
+                let mut config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
                 if let Some(network_threads) = cmd.network_threads {
-                    ordhook_config.resources.bitcoind_rpc_threads = network_threads;
+                    config.resources.bitcoind_rpc_threads = network_threads;
                 }
                 let block_post_processor = match cmd.repair_observers {
                     Some(true) => {
@@ -894,7 +873,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 download_and_pipeline_blocks(
                     &config,
                     blocks,
-                    ordhook_config.first_inscription_height,
+                    first_inscription_height(&config),
                     Some(&inscription_indexing_processor),
                     10_000,
                     ctx,
@@ -928,12 +907,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
         Command::Db(OrdhookDbCommand::Check(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             {
-                let blocks_db = open_readonly_ordhook_db_conn_rocks_db(
-                    &config.expected_cache_path(),
-                    config.resources.ulimit,
-                    config.resources.memory_available,
-                    ctx,
-                )?;
+                let blocks_db = open_readonly_blocks_db(&config, ctx)?;
                 let tip = find_last_block_inserted(&blocks_db);
                 println!("Tip: {}", tip);
                 let missing_blocks = find_missing_blocks(&blocks_db, 1, tip, ctx);
@@ -953,20 +927,13 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 return Err("Deletion aborted".to_string());
             }
 
-            let (blocks_db_rw, inscriptions_db_conn_rw) = open_readwrite_ordhook_dbs(
-                &config.expected_cache_path(),
-                config.resources.ulimit,
-                config.resources.memory_available,
-                &ctx,
-            )?;
-            let brc_20_db_conn_rw = brc20_new_rw_db_conn(&config, ctx);
+            let (blocks_db_rw, sqlite_dbs_rw) = open_all_dbs_rw(&config, &ctx)?;
 
-            delete_data_in_ordhook_db(
+            drop_block_data_from_all_dbs(
                 cmd.start_block,
                 cmd.end_block,
-                &inscriptions_db_conn_rw,
                 &blocks_db_rw,
-                &brc_20_db_conn_rw,
+                &sqlite_dbs_rw,
                 ctx,
             )?;
             info!(

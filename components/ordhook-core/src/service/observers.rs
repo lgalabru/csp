@@ -19,12 +19,13 @@ use serde_json::json;
 
 use crate::{
     config::Config,
-    db::{
+    db::ordinals::{
         create_or_open_readwrite_db, open_existing_readonly_db, perform_query_one,
         perform_query_set,
     },
     scan::bitcoin::process_block_with_predicates,
-    try_warn, utils::monitoring::PrometheusMonitoring,
+    try_warn,
+    utils::monitoring::PrometheusMonitoring,
 };
 
 pub fn update_observer_progress(

@@ -4,9 +4,9 @@ use crate::core::protocol::inscription_parsing::{
     parse_inscriptions_and_standardize_block,
 };
 use crate::core::protocol::inscription_sequencing::consolidate_block_with_pre_computed_ordinals_data;
-use crate::db::get_any_entry_in_ordinal_activities;
+use crate::db::initialize_sqlite_dbs;
+use crate::db::ordinals::get_any_entry_in_ordinal_activities;
 use crate::download::download_archive_datasets_if_required;
-use crate::initialize_databases;
 use crate::service::observers::{
     open_readwrite_observers_db_conn_or_panic, update_observer_progress,
 };
@@ -77,8 +77,8 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
 
     while let Some(current_block_height) = block_heights_to_scan.pop_front() {
         // Open DB connections
-        let db_connections = initialize_databases(&config, ctx);
-        let mut inscriptions_db_conn = db_connections.ordhook;
+        let db_connections = initialize_sqlite_dbs(&config, ctx);
+        let mut inscriptions_db_conn = db_connections.ordinals;
         let brc20_db_conn = match predicate_spec.predicate {
             // Even if we have a valid BRC-20 DB connection, check if the predicate we're evaluating requires us to do the work.
             BitcoinPredicateType::OrdinalsProtocol(OrdinalOperations::InscriptionFeed(
