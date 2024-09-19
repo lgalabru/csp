@@ -17,7 +17,7 @@ use ordhook::chainhook_sdk::utils::BlockHeights;
 use ordhook::chainhook_sdk::utils::Context;
 use ordhook::config::Config;
 use ordhook::core::meta_protocols::brc20::db::get_brc20_operations_on_block;
-use ordhook::core::pipeline::download_and_pipeline_blocks;
+use ordhook::core::pipeline::bitcoind_download_blocks;
 use ordhook::core::pipeline::processors::block_archiving::start_block_archiving_processor;
 use ordhook::core::pipeline::processors::start_inscription_indexing_processor;
 use ordhook::core::protocol::inscription_parsing::parse_inscriptions_and_standardize_block;
@@ -814,7 +814,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             initialize_sqlite_dbs(&config, ctx);
             let service = Service::new(config, ctx.clone());
-            service.update_state(None).await?;
+            service.catch_up_to_bitcoin_chain_tip(None).await?;
         }
         Command::Db(OrdhookDbCommand::Repair(subcmd)) => match subcmd {
             RepairCommand::Blocks(cmd) => {
@@ -825,11 +825,11 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let blocks = cmd.get_blocks();
                 let block_ingestion_processor =
                     start_block_archiving_processor(&config, ctx, false, None);
-                download_and_pipeline_blocks(
+                bitcoind_download_blocks(
                     &config,
                     blocks,
                     first_inscription_height(&config),
-                    Some(&block_ingestion_processor),
+                    &block_ingestion_processor,
                     10_000,
                     ctx,
                 )
@@ -870,11 +870,11 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                     &PrometheusMonitoring::new(),
                 );
 
-                download_and_pipeline_blocks(
+                bitcoind_download_blocks(
                     &config,
                     blocks,
                     first_inscription_height(&config),
-                    Some(&inscription_indexing_processor),
+                    &inscription_indexing_processor,
                     10_000,
                     ctx,
                 )
