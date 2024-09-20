@@ -93,6 +93,6 @@ pub fn drop_block_data_from_all_dbs(
 pub fn drop_all_dbs(config: &Config) {
     let dir_path = &config.expected_cache_path();
     if dir_path.exists() {
-        std::fs::remove_dir_all(dir_path).expect("");
+        std::fs::remove_dir_all(dir_path).unwrap();
     }
 }

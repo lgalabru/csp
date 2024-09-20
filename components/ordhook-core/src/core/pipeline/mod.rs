@@ -35,20 +35,16 @@ pub struct PostProcessorController {
     pub thread_handle: JoinHandle<()>,
 }
 
-pub async fn download_and_pipeline_blocks(
+/// Downloads blocks from bitcoind's RPC interface and pushes them to a `PostProcessorController` so they can be indexed or
+/// ingested as needed.
+pub async fn bitcoind_download_blocks(
     config: &Config,
     blocks: Vec<u64>,
     start_sequencing_blocks_at_height: u64,
-    blocks_post_processor: Option<&PostProcessorController>,
+    blocks_post_processor: &PostProcessorController,
     speed: usize,
     ctx: &Context,
 ) -> Result<(), String> {
-    // let guard = pprof::ProfilerGuardBuilder::default()
-    //     .frequency(20)
-    //     .blocklist(&["libc", "libgcc", "pthread", "vdso"])
-    //     .build()
-    //     .unwrap();
-
     let bitcoin_config = BitcoinConfig {
         username: config.network.bitcoind_rpc_username.clone(),
         password: config.network.bitcoind_rpc_password.clone(),
@@ -154,10 +150,7 @@ pub async fn download_and_pipeline_blocks(
 
     let cloned_ctx = ctx.clone();
 
-    let blocks_post_processor_commands_tx = blocks_post_processor
-        .as_ref()
-        .and_then(|p| Some(p.commands_tx.clone()));
-
+    let blocks_post_processor_commands_tx = blocks_post_processor.commands_tx.clone();
     let storage_thread = hiro_system_kit::thread_named("Block processor dispatcher")
         .spawn(move || {
             let mut inbox = HashMap::new();
@@ -171,9 +164,7 @@ pub async fn download_and_pipeline_blocks(
                         cloned_ctx,
                         "#{blocks_processed} blocks successfully sent to processor"
                     );
-                    if let Some(ref blocks_tx) = blocks_post_processor_commands_tx {
-                        let _ = blocks_tx.send(PostProcessorCommand::Terminate);
-                    }
+                    let _ = blocks_post_processor_commands_tx.send(PostProcessorCommand::Terminate);
                     break;
                 }
 
@@ -216,12 +207,9 @@ pub async fn download_and_pipeline_blocks(
                 // Early "continue"
                 if !ooo_compacted_blocks.is_empty() {
                     blocks_processed += ooo_compacted_blocks.len() as u64;
-                    if let Some(ref blocks_tx) = blocks_post_processor_commands_tx {
-                        let _ = blocks_tx.send(PostProcessorCommand::ProcessBlocks(
-                            ooo_compacted_blocks,
-                            vec![],
-                        ));
-                    }
+                    let _ = blocks_post_processor_commands_tx.send(
+                        PostProcessorCommand::ProcessBlocks(ooo_compacted_blocks, vec![]),
+                    );
                 }
 
                 if inbox.is_empty() {
@@ -240,12 +228,9 @@ pub async fn download_and_pipeline_blocks(
                 blocks_processed += blocks.len() as u64;
 
                 if !blocks.is_empty() {
-                    if let Some(ref blocks_tx) = blocks_post_processor_commands_tx {
-                        let _ = blocks_tx.send(PostProcessorCommand::ProcessBlocks(
-                            compacted_blocks,
-                            blocks,
-                        ));
-                    }
+                    let _ = blocks_post_processor_commands_tx.send(
+                        PostProcessorCommand::ProcessBlocks(compacted_blocks, blocks),
+                    );
                 }
 
                 if inbox_cursor > end_block {
@@ -304,12 +289,10 @@ pub async fn download_and_pipeline_blocks(
 
     try_debug!(ctx, "Pipeline successfully terminated");
 
-    if let Some(post_processor) = blocks_post_processor {
-        loop {
-            if let Ok(signal) = post_processor.events_rx.recv() {
-                match signal {
-                    PostProcessorEvent::Terminated | PostProcessorEvent::Expired => break,
-                }
+    loop {
+        if let Ok(signal) = blocks_post_processor.events_rx.recv() {
+            match signal {
+                PostProcessorEvent::Terminated | PostProcessorEvent::Expired => break,
             }
         }
     }

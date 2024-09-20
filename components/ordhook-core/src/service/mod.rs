@@ -10,7 +10,7 @@ use crate::core::meta_protocols::brc20::parser::ParsedBrc20Operation;
 use crate::core::meta_protocols::brc20::verifier::{
     verify_brc20_operation, verify_brc20_transfer, VerifiedBrc20Operation,
 };
-use crate::core::pipeline::download_and_pipeline_blocks;
+use crate::core::pipeline::bitcoind_download_blocks;
 use crate::core::pipeline::processors::block_archiving::start_block_archiving_processor;
 use crate::core::pipeline::processors::inscription_indexing::process_block;
 use crate::core::pipeline::processors::start_inscription_indexing_processor;
@@ -123,12 +123,12 @@ impl Service {
         } else {
             None
         };
-        self.catch_up_with_chain_tip(false, check_blocks_integrity, block_post_processor)
+        if check_blocks_integrity {
+            self.check_blocks_db_integrity().await?;
+        }
+        self.catch_up_to_bitcoin_chain_tip(block_post_processor)
             .await?;
-        try_info!(
-            self.ctx,
-            "Database up to date, service will start streaming blocks"
-        );
+        try_info!(self.ctx, "Service: Streaming blocks start");
 
         // Sidecar channels setup
         let observer_sidecar = self.set_up_observer_sidecar_runloop()?;
@@ -403,62 +403,50 @@ impl Service {
         Ok(observer_sidecar)
     }
 
-    pub async fn catch_up_with_chain_tip(
-        &mut self,
-        _rebuild_from_scratch: bool,
-        compact_and_check_rocksdb_integrity: bool,
-        block_post_processor: Option<crossbeam_channel::Sender<BitcoinBlockData>>,
-    ) -> Result<(), String> {
-        {
-            if compact_and_check_rocksdb_integrity {
-                let (tip, missing_blocks) = {
-                    let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
+    pub async fn check_blocks_db_integrity(&mut self) -> Result<(), String> {
+        let (tip, missing_blocks) = {
+            let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
 
-                    let ordhook_db =
-                        open_ordinals_db(&self.config.expected_cache_path(), &self.ctx)
-                            .expect("unable to retrieve ordhook db");
-                    let tip = find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap()
-                        as u32;
-                    info!(
-                        self.ctx.expect_logger(),
-                        "Checking database integrity up to block #{tip}",
-                    );
-                    let missing_blocks = find_missing_blocks(&blocks_db, 0, tip, &self.ctx);
-                    (tip, missing_blocks)
-                };
-                if !missing_blocks.is_empty() {
-                    info!(
-                        self.ctx.expect_logger(),
-                        "{} missing blocks detected, will attempt to repair data",
-                        missing_blocks.len()
-                    );
-                    let block_ingestion_processor =
-                        start_block_archiving_processor(&self.config, &self.ctx, false, None);
-                    download_and_pipeline_blocks(
-                        &self.config,
-                        missing_blocks.into_iter().map(|x| x as u64).collect(),
-                        tip.into(),
-                        Some(&block_ingestion_processor),
-                        10_000,
-                        &self.ctx,
-                    )
-                    .await?;
-                }
-                let blocks_db_rw = open_blocks_db_with_retry(false, &self.config, &self.ctx);
-                info!(self.ctx.expect_logger(), "Running database compaction",);
-                run_compaction(&blocks_db_rw, tip);
-            }
+            let ordhook_db = open_ordinals_db(&self.config.expected_cache_path(), &self.ctx)
+                .expect("unable to retrieve ordhook db");
+            let tip = find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap() as u32;
+            info!(
+                self.ctx.expect_logger(),
+                "Checking database integrity up to block #{tip}",
+            );
+            let missing_blocks = find_missing_blocks(&blocks_db, 0, tip, &self.ctx);
+            (tip, missing_blocks)
+        };
+        if !missing_blocks.is_empty() {
+            info!(
+                self.ctx.expect_logger(),
+                "{} missing blocks detected, will attempt to repair data",
+                missing_blocks.len()
+            );
+            let block_ingestion_processor =
+                start_block_archiving_processor(&self.config, &self.ctx, false, None);
+            bitcoind_download_blocks(
+                &self.config,
+                missing_blocks.into_iter().map(|x| x as u64).collect(),
+                tip.into(),
+                &block_ingestion_processor,
+                10_000,
+                &self.ctx,
+            )
+            .await?;
         }
-        self.update_state(block_post_processor).await
+        let blocks_db_rw = open_blocks_db_with_retry(false, &self.config, &self.ctx);
+        info!(self.ctx.expect_logger(), "Running database compaction",);
+        run_compaction(&blocks_db_rw, tip);
+        Ok(())
     }
 
-    pub async fn update_state(
+    /// Synchronizes and indexes all databases until their block height matches bitcoind's block height.
+    pub async fn catch_up_to_bitcoin_chain_tip(
         &self,
         block_post_processor: Option<crossbeam_channel::Sender<BitcoinBlockData>>,
     ) -> Result<(), String> {
-        // First, make sure that rocksdb and sqlite are aligned.
-        // If rocksdb.chain_tip.height <= sqlite.chain_tip.height
-        // Perform some block compression until that height.
+        // 1: Catch up blocks DB so it is at the same height as the ordinals DB.
         if let Some((start_block, end_block)) = should_sync_rocks_db(&self.config, &self.ctx)? {
             let blocks_post_processor = start_block_archiving_processor(
                 &self.config,
@@ -466,27 +454,25 @@ impl Service {
                 true,
                 block_post_processor.clone(),
             );
-
             try_info!(
                 self.ctx,
-                "Compressing blocks (from #{start_block} to #{end_block})"
+                "Service: Compressing blocks from #{start_block} to #{end_block}"
             );
-
             let blocks = BlockHeights::BlockRange(start_block, end_block)
                 .get_sorted_entries()
                 .map_err(|_e| format!("Block start / end block spec invalid"))?;
-            download_and_pipeline_blocks(
+            bitcoind_download_blocks(
                 &self.config,
                 blocks.into(),
                 first_inscription_height(&self.config),
-                Some(&blocks_post_processor),
+                &blocks_post_processor,
                 10_000,
                 &self.ctx,
             )
             .await?;
         }
 
-        // Start predicate processor
+        // 2: Catch up ordinals DB until it reaches bitcoind block height. This will also advance blocks DB.
         let mut last_block_processed = 0;
         while let Some((start_block, end_block, speed)) =
             should_sync_ordhook_db(&self.config, &self.ctx)?
@@ -500,20 +486,18 @@ impl Service {
                 block_post_processor.clone(),
                 &self.prometheus,
             );
-
             try_info!(
                 self.ctx,
-                "Indexing inscriptions from block #{start_block} to block #{end_block}"
+                "Service: Indexing inscriptions from #{start_block} to #{end_block}"
             );
-
             let blocks = BlockHeights::BlockRange(start_block, end_block)
                 .get_sorted_entries()
                 .map_err(|_e| format!("Block start / end block spec invalid"))?;
-            download_and_pipeline_blocks(
+            bitcoind_download_blocks(
                 &self.config,
                 blocks.into(),
                 first_inscription_height(&self.config),
-                Some(&blocks_post_processor),
+                &blocks_post_processor,
                 speed,
                 &self.ctx,
             )
@@ -522,6 +506,7 @@ impl Service {
             last_block_processed = end_block;
         }
 
+        try_info!(self.ctx, "Service: Index has reached bitcoin chain tip");
         Ok(())
     }
 
@@ -534,11 +519,11 @@ impl Service {
         let blocks_post_processor =
             start_transfers_recomputing_processor(&self.config, &self.ctx, block_post_processor);
 
-        download_and_pipeline_blocks(
+        bitcoind_download_blocks(
             &self.config,
             blocks,
             first_inscription_height(&self.config),
-            Some(&blocks_post_processor),
+            &blocks_post_processor,
             100,
             &self.ctx,
         )
