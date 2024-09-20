@@ -61,6 +61,7 @@ pub fn bitcoind_wait_for_chain_tip(config: &Config, ctx: &Context) {
                     }
                     try_info!(ctx, "bitcoind: Verifying chain tip");
                 } else {
+                    confirmations = 0;
                     try_info!(ctx, "bitcoind: Node has not reached chain tip, trying again");
                 }
             }
