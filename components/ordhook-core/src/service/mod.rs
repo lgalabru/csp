@@ -128,10 +128,7 @@ impl Service {
         }
         self.catch_up_to_bitcoin_chain_tip(block_post_processor)
             .await?;
-        try_info!(
-            self.ctx,
-            "Database up to date, service will start streaming blocks"
-        );
+        try_info!(self.ctx, "Service: Streaming blocks start");
 
         // Sidecar channels setup
         let observer_sidecar = self.set_up_observer_sidecar_runloop()?;
@@ -459,7 +456,7 @@ impl Service {
             );
             try_info!(
                 self.ctx,
-                "Blocks DB: Compressing blocks from #{start_block} to #{end_block}"
+                "Service: Compressing blocks from #{start_block} to #{end_block}"
             );
             let blocks = BlockHeights::BlockRange(start_block, end_block)
                 .get_sorted_entries()
@@ -489,12 +486,10 @@ impl Service {
                 block_post_processor.clone(),
                 &self.prometheus,
             );
-
             try_info!(
                 self.ctx,
-                "Indexing inscriptions from block #{start_block} to block #{end_block}"
+                "Service: Indexing inscriptions from #{start_block} to #{end_block}"
             );
-
             let blocks = BlockHeights::BlockRange(start_block, end_block)
                 .get_sorted_entries()
                 .map_err(|_e| format!("Block start / end block spec invalid"))?;
@@ -511,6 +506,7 @@ impl Service {
             last_block_processed = end_block;
         }
 
+        try_info!(self.ctx, "Service: Index has reached bitcoin chain tip");
         Ok(())
     }
 
