@@ -57,6 +57,7 @@ pub fn bitcoind_wait_for_chain_tip(config: &Config, ctx: &Context) {
                     // Wait for 10 confirmations before declaring node is at chain tip, just in case it's still connecting to
                     // peers.
                     if confirmations == 10 {
+                        try_info!(ctx, "bitcoind: Chain tip reached");
                         return;
                     }
                     try_info!(ctx, "bitcoind: Verifying chain tip");
