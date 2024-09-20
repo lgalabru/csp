@@ -10,10 +10,10 @@ use threadpool::ThreadPool;
 use crate::{
     config::Config,
     scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate,
-    service::{
-        observers::open_readwrite_observers_db_conn_or_panic, update_observer_streaming_enabled,
+    service::observers::{
+        open_readwrite_observers_db_conn_or_panic, update_observer_streaming_enabled,
     },
-    try_error,
+    try_error, try_info,
 };
 
 pub fn start_bitcoin_scan_runloop(
@@ -22,13 +22,12 @@ pub fn start_bitcoin_scan_runloop(
     observer_command_tx: Sender<ObserverCommand>,
     ctx: &Context,
 ) {
+    try_info!(ctx, "Starting bitcoin scan runloop");
     let bitcoin_scan_pool = ThreadPool::new(config.resources.expected_observers_count);
-
     while let Ok(predicate_spec) = bitcoin_scan_op_rx.recv() {
         let moved_ctx = ctx.clone();
         let moved_config = config.clone();
         let observer_command_tx = observer_command_tx.clone();
-        let db_base_dir = config.expected_cache_path();
         bitcoin_scan_pool.execute(move || {
             let op = scan_bitcoin_chainstate_via_rpc_using_predicate(
                 &predicate_spec,
@@ -47,7 +46,7 @@ pub fn start_bitcoin_scan_runloop(
 
                     // Update predicate
                     let mut observers_db_conn =
-                        open_readwrite_observers_db_conn_or_panic(&db_base_dir, &moved_ctx);
+                        open_readwrite_observers_db_conn_or_panic(&moved_config, &moved_ctx);
                     update_observer_streaming_enabled(
                         &predicate_spec.uuid,
                         false,

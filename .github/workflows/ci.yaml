@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - beta
       - develop
     paths-ignore:
       - "**/CHANGELOG.md"
@@ -19,7 +20,14 @@ env:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [cli, core]
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./components/ordhook-${{ matrix.suite }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,14 +49,8 @@ jobs:
           rustup update
           cargo install --force cargo-tarpaulin
 
-      - name: Run Core tests
+      - name: Run tests
         run: |
-          cd ${{ github.workspace }}/components/ordhook-core
-          cargo tarpaulin --skip-clean --out lcov -- --test-threads=1
-
-      - name: Run CLI tests
-        run: |
-          cd ${{ github.workspace }}/components/ordhook-cli
           cargo tarpaulin --skip-clean --out lcov -- --test-threads=1
 
       - name: Upload coverage reports to Codecov

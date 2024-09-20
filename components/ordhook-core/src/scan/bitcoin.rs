@@ -1,12 +1,12 @@
 use crate::config::Config;
-use crate::core::meta_protocols::brc20::db::open_readonly_brc20_db_conn;
 use crate::core::protocol::inscription_parsing::{
     get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
     parse_inscriptions_and_standardize_block,
 };
 use crate::core::protocol::inscription_sequencing::consolidate_block_with_pre_computed_ordinals_data;
-use crate::db::{get_any_entry_in_ordinal_activities, open_readonly_ordhook_db_conn};
-use crate::download::download_ordinals_dataset_if_required;
+use crate::db::initialize_sqlite_dbs;
+use crate::db::ordinals::get_any_entry_in_ordinal_activities;
+use crate::download::download_archive_datasets_if_required;
 use crate::service::observers::{
     open_readwrite_observers_db_conn_or_panic, update_observer_progress,
 };
@@ -34,7 +34,7 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
     event_observer_config_override: Option<&EventObserverConfig>,
     ctx: &Context,
 ) -> Result<(), String> {
-    let _ = download_ordinals_dataset_if_required(config, ctx).await;
+    download_archive_datasets_if_required(config, ctx).await;
     let mut floating_end_block = false;
 
     let block_heights_to_scan_res = if let Some(ref blocks) = predicate_spec.blocks {
@@ -76,15 +76,14 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
     let http_client = build_http_client();
 
     while let Some(current_block_height) = block_heights_to_scan.pop_front() {
-        let mut inscriptions_db_conn =
-            open_readonly_ordhook_db_conn(&config.expected_cache_path(), ctx)?;
+        // Open DB connections
+        let db_connections = initialize_sqlite_dbs(&config, ctx);
+        let mut inscriptions_db_conn = db_connections.ordinals;
         let brc20_db_conn = match predicate_spec.predicate {
+            // Even if we have a valid BRC-20 DB connection, check if the predicate we're evaluating requires us to do the work.
             BitcoinPredicateType::OrdinalsProtocol(OrdinalOperations::InscriptionFeed(
                 ref feed_data,
-            )) if feed_data.meta_protocols.is_some() => Some(open_readonly_brc20_db_conn(
-                &config.expected_cache_path(),
-                ctx,
-            )?),
+            )) if feed_data.meta_protocols.is_some() => db_connections.brc20,
             _ => None,
         };
 
@@ -158,8 +157,7 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
             Err(e) => return Err(format!("Scan aborted: {e}")),
         }
         {
-            let observers_db_conn =
-                open_readwrite_observers_db_conn_or_panic(&config.expected_cache_path(), &ctx);
+            let observers_db_conn = open_readwrite_observers_db_conn_or_panic(&config, &ctx);
             update_observer_progress(
                 &predicate_spec.uuid,
                 current_block_height,
@@ -232,9 +230,7 @@ pub async fn execute_predicates_action<'a>(
                     BitcoinChainhookOccurrence::Http(request, _data) => {
                         send_request(request, 60, 3, &ctx).await
                     }
-                    BitcoinChainhookOccurrence::File(path, bytes) => {
-                        file_append(path, bytes, &ctx)
-                    }
+                    BitcoinChainhookOccurrence::File(path, bytes) => file_append(path, bytes, &ctx),
                     BitcoinChainhookOccurrence::Data(payload) => {
                         if let Some(ref tx) = config.data_handler_tx {
                             match tx.send(DataHandlerEvent::Process(payload)) {
@@ -247,7 +243,7 @@ pub async fn execute_predicates_action<'a>(
                     }
                 };
                 match result {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(error) => return Err(error),
                 }
             }

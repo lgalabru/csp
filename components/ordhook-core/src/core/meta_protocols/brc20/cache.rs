@@ -7,7 +7,7 @@ use chainhook_sdk::{
 use lru::LruCache;
 use rusqlite::{Connection, Transaction};
 
-use crate::core::meta_protocols::brc20::db::get_unsent_token_transfer;
+use crate::{config::Config, core::meta_protocols::brc20::db::get_unsent_token_transfer};
 
 use super::{
     db::{
@@ -16,6 +16,15 @@ use super::{
     },
     verifier::{VerifiedBrc20BalanceData, VerifiedBrc20TokenDeployData, VerifiedBrc20TransferData},
 };
+
+/// If the given `config` has BRC-20 enabled, returns a BRC-20 memory cache.
+pub fn brc20_new_cache(config: &Config) -> Option<Brc20MemoryCache> {
+    if config.meta_protocols.brc20 {
+        Some(Brc20MemoryCache::new(config.resources.brc20_lru_cache_size))
+    } else {
+        None
+    }
+}
 
 /// Keeps BRC20 DB rows before they're inserted into SQLite. Use `flush` to insert.
 pub struct Brc20DbCache {
@@ -167,6 +176,7 @@ impl Brc20MemoryCache {
             inscription_number: reveal.inscription_number.jubilee as u64,
             block_height: block_identifier.index,
             tick: data.tick.clone(),
+            display_tick: data.display_tick.clone(),
             max: data.max,
             lim: data.lim,
             dec: data.dec,
@@ -365,6 +375,7 @@ mod test {
         cache.insert_token_deploy(
             &VerifiedBrc20TokenDeployData {
                 tick: "pepe".to_string(),
+                display_tick: "pepe".to_string(),
                 max: 21000000.0,
                 lim: 1000.0,
                 dec: 18,
@@ -480,6 +491,7 @@ mod test {
         cache.insert_token_deploy(
             &VerifiedBrc20TokenDeployData {
                 tick: "pepe".to_string(),
+                display_tick: "pepe".to_string(),
                 max: 21000000.0,
                 lim: 1000.0,
                 dec: 18,

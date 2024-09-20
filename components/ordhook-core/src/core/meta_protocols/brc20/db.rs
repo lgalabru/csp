@@ -1,17 +1,14 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    db::{
-        create_or_open_readwrite_db, open_existing_readonly_db, perform_query_one,
-        perform_query_set,
-    },
-    try_warn,
+    config::Config,
+    db::ordinals::{create_or_open_readwrite_db, perform_query_one, perform_query_set},
+    try_error, try_warn,
 };
 use chainhook_sdk::{
     types::{
-        BitcoinBlockData, BitcoinTransactionData, BlockIdentifier, Brc20BalanceData,
-        Brc20Operation, Brc20TokenDeployData, Brc20TransferData, OrdinalInscriptionRevealData,
-        OrdinalOperation,
+        BitcoinBlockData, BitcoinTransactionData, Brc20BalanceData, Brc20Operation,
+        Brc20TokenDeployData, Brc20TransferData, OrdinalInscriptionRevealData, OrdinalOperation,
     },
     utils::Context,
 };
@@ -23,6 +20,7 @@ pub struct Brc20DbTokenRow {
     pub inscription_number: u64,
     pub block_height: u64,
     pub tick: String,
+    pub display_tick: String,
     pub max: f64,
     pub lim: f64,
     pub dec: u64,
@@ -44,6 +42,21 @@ pub struct Brc20DbLedgerRow {
     pub operation: String,
 }
 
+/// If the given `config` has BRC-20 enabled, returns a read/write DB connection for BRC-20.
+pub fn brc20_new_rw_db_conn(config: &Config, ctx: &Context) -> Option<Connection> {
+    if config.meta_protocols.brc20 {
+        match open_readwrite_brc20_db_conn(&config.expected_cache_path(), &ctx) {
+            Ok(db) => Some(db),
+            Err(e) => {
+                try_error!(ctx, "Unable to open readwrite brc20 connection: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    }
+}
+
 pub fn get_default_brc20_db_file_path(base_dir: &PathBuf) -> PathBuf {
     let mut destination_path = base_dir.clone();
     destination_path.push("brc20.sqlite");
@@ -59,6 +72,7 @@ pub fn initialize_brc20_db(base_dir: Option<&PathBuf>, ctx: &Context) -> Connect
             inscription_number INTEGER NOT NULL,
             block_height INTEGER NOT NULL,
             tick TEXT NOT NULL,
+            display_tick TEXT NOT NULL,
             max REAL NOT NULL,
             lim REAL NOT NULL,
             dec INTEGER NOT NULL,
@@ -131,21 +145,9 @@ pub fn initialize_brc20_db(base_dir: Option<&PathBuf>, ctx: &Context) -> Connect
     conn
 }
 
-pub fn open_readwrite_brc20_db_conn(
-    base_dir: &PathBuf,
-    ctx: &Context,
-) -> Result<Connection, String> {
+fn open_readwrite_brc20_db_conn(base_dir: &PathBuf, ctx: &Context) -> Result<Connection, String> {
     let db_path = get_default_brc20_db_file_path(&base_dir);
     let conn = create_or_open_readwrite_db(Some(&db_path), ctx);
-    Ok(conn)
-}
-
-pub fn open_readonly_brc20_db_conn(
-    base_dir: &PathBuf,
-    ctx: &Context,
-) -> Result<Connection, String> {
-    let db_path = get_default_brc20_db_file_path(&base_dir);
-    let conn = open_existing_readonly_db(&db_path, ctx);
     Ok(conn)
 }
 
@@ -174,20 +176,21 @@ pub fn delete_activity_in_block_range(
 pub fn get_token(tick: &str, db_tx: &Connection, ctx: &Context) -> Option<Brc20DbTokenRow> {
     let args: &[&dyn ToSql] = &[&tick.to_sql().unwrap()];
     let query = "
-        SELECT tick, max, lim, dec, address, inscription_id, inscription_number, block_height, self_mint
+        SELECT tick, display_tick, max, lim, dec, address, inscription_id, inscription_number, block_height, self_mint
         FROM tokens
         WHERE tick = ?
     ";
     perform_query_one(query, args, &db_tx, ctx, |row| Brc20DbTokenRow {
         tick: row.get(0).unwrap(),
-        max: row.get(1).unwrap(),
-        lim: row.get(2).unwrap(),
-        dec: row.get(3).unwrap(),
-        address: row.get(4).unwrap(),
-        inscription_id: row.get(5).unwrap(),
-        inscription_number: row.get(6).unwrap(),
-        block_height: row.get(7).unwrap(),
-        self_mint: row.get(8).unwrap(),
+        display_tick: row.get(1).unwrap(),
+        max: row.get(2).unwrap(),
+        lim: row.get(3).unwrap(),
+        dec: row.get(4).unwrap(),
+        address: row.get(5).unwrap(),
+        inscription_id: row.get(6).unwrap(),
+        inscription_number: row.get(7).unwrap(),
+        block_height: row.get(8).unwrap(),
+        self_mint: row.get(9).unwrap(),
     })
 }
 
@@ -293,8 +296,8 @@ pub fn insert_ledger_rows(rows: &Vec<Brc20DbLedgerRow>, db_tx: &Connection, ctx:
 pub fn insert_token_rows(rows: &Vec<Brc20DbTokenRow>, db_tx: &Connection, ctx: &Context) {
     match db_tx.prepare_cached(
         "INSERT INTO tokens
-        (inscription_id, inscription_number, block_height, tick, max, lim, dec, address, self_mint)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (inscription_id, inscription_number, block_height, tick, display_tick, max, lim, dec, address, self_mint)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ) {
         Ok(mut stmt) => {
             for row in rows.iter() {
@@ -303,6 +306,7 @@ pub fn insert_token_rows(rows: &Vec<Brc20DbTokenRow>, db_tx: &Connection, ctx: &
                     &row.inscription_number,
                     &row.block_height,
                     &row.tick,
+                    &row.display_tick,
                     &row.max,
                     &row.lim,
                     &row.dec,
@@ -325,11 +329,11 @@ pub fn insert_token_rows(rows: &Vec<Brc20DbTokenRow>, db_tx: &Connection, ctx: &
 }
 
 pub fn get_brc20_operations_on_block(
-    block_identifier: &BlockIdentifier,
+    block_height: u64,
     db_tx: &Connection,
     ctx: &Context,
 ) -> HashMap<u64, Brc20DbLedgerRow> {
-    let args: &[&dyn ToSql] = &[&block_identifier.index.to_sql().unwrap()];
+    let args: &[&dyn ToSql] = &[&block_height.to_sql().unwrap()];
     let query = "
         SELECT
             inscription_id, inscription_number, ordinal_number, block_height, tx_index, tick, address, avail_balance, trans_balance, operation
@@ -355,6 +359,8 @@ pub fn get_brc20_operations_on_block(
     map
 }
 
+/// Searches for the BRC-20 operation happening in this transaction in the `brc20.sqlite` DB and writes it to this transaction
+/// object's metadata if it exists.
 pub fn augment_transaction_with_brc20_operation_data(
     tx: &mut BitcoinTransactionData,
     token_map: &mut HashMap<String, Brc20DbTokenRow>,
@@ -378,7 +384,7 @@ pub fn augment_transaction_with_brc20_operation_data(
     match entry.operation.as_str() {
         "deploy" => {
             tx.metadata.brc20_operation = Some(Brc20Operation::Deploy(Brc20TokenDeployData {
-                tick: token.tick.clone(),
+                tick: token.display_tick.clone(),
                 max: format!("{:.precision$}", token.max, precision = dec),
                 lim: format!("{:.precision$}", token.lim, precision = dec),
                 dec: token.dec.to_string(),
@@ -389,7 +395,7 @@ pub fn augment_transaction_with_brc20_operation_data(
         }
         "mint" => {
             tx.metadata.brc20_operation = Some(Brc20Operation::Mint(Brc20BalanceData {
-                tick: entry.tick.clone(),
+                tick: token.display_tick.clone(),
                 amt: format!("{:.precision$}", entry.avail_balance, precision = dec),
                 address: entry.address.clone(),
                 inscription_id: entry.inscription_id.clone(),
@@ -397,7 +403,7 @@ pub fn augment_transaction_with_brc20_operation_data(
         }
         "transfer" => {
             tx.metadata.brc20_operation = Some(Brc20Operation::Transfer(Brc20BalanceData {
-                tick: entry.tick.clone(),
+                tick: token.display_tick.clone(),
                 amt: format!("{:.precision$}", entry.trans_balance, precision = dec),
                 address: entry.address.clone(),
                 inscription_id: entry.inscription_id.clone(),
@@ -413,7 +419,7 @@ pub fn augment_transaction_with_brc20_operation_data(
                 );
             };
             tx.metadata.brc20_operation = Some(Brc20Operation::TransferSend(Brc20TransferData {
-                tick: entry.tick.clone(),
+                tick: token.display_tick.clone(),
                 amt: format!("{:.precision$}", entry.trans_balance.abs(), precision = dec),
                 sender_address: entry.address.clone(),
                 receiver_address,
@@ -487,7 +493,8 @@ pub fn write_augmented_block_to_brc20_db(
                         inscription_id: token.inscription_id.clone(),
                         inscription_number: reveal.inscription_number.jubilee as u64,
                         block_height: block.block_identifier.index,
-                        tick: token.tick.clone(),
+                        tick: token.tick.to_lowercase(),
+                        display_tick: token.tick.clone(),
                         max: token.max.parse::<f64>().unwrap(),
                         lim: token.lim.parse::<f64>().unwrap(),
                         dec: token.dec.parse::<u64>().unwrap(),
@@ -608,4 +615,89 @@ pub fn write_augmented_block_to_brc20_db(
     }
     insert_token_rows(&tokens, db_conn, ctx);
     insert_ledger_rows(&ledger_rows, db_conn, ctx);
+}
+
+#[cfg(test)]
+mod test {
+    use chainhook_sdk::{
+        types::{
+            Brc20Operation, Brc20TokenDeployData, OrdinalInscriptionNumber,
+            OrdinalInscriptionRevealData, OrdinalOperation,
+        },
+        utils::Context,
+    };
+
+    use crate::{
+        config::Config,
+        core::test_builders::{TestBlockBuilder, TestTransactionBuilder},
+        db::{drop_all_dbs, initialize_sqlite_dbs},
+    };
+
+    use super::{get_token, write_augmented_block_to_brc20_db};
+
+    #[test]
+    fn writes_augmented_block_to_db() {
+        let ctx = Context::empty();
+        let mut config = Config::test_default();
+        config.meta_protocols.brc20 = true;
+        drop_all_dbs(&config);
+        let sqlite_dbs = initialize_sqlite_dbs(&config, &ctx);
+
+        let block = TestBlockBuilder::new()
+            .hash("0xb61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string())
+            .height(850000)
+            .add_transaction(TestTransactionBuilder::new().build())
+            .add_transaction(
+                TestTransactionBuilder::new()
+                    .hash("0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9".to_string())
+                    .add_ordinal_operation(OrdinalOperation::InscriptionRevealed(OrdinalInscriptionRevealData {
+                        content_bytes: "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string(),
+                        content_type: "text/plain;charset=utf-8".to_string(),
+                        content_length: 94,
+                        inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
+                        inscription_fee: 0,
+                        inscription_output_value: 0,
+                        inscription_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string(),
+                        inscription_input_index: 0,
+                        inscription_pointer: None,
+                        inscriber_address: None,
+                        delegate: None,
+                        metaprotocol: None,
+                        metadata: None,
+                        parent: None,
+                        ordinal_number: 0,
+                        ordinal_block_height: 0,
+                        ordinal_offset: 0,
+                        tx_index: 0,
+                        transfers_pre_inscription: 0,
+                        satpoint_post_inscription: "".to_string(),
+                        curse_type: None,
+                    }))
+                    .brc20_operation(Some(Brc20Operation::Deploy(Brc20TokenDeployData {
+                        tick: "ordi".to_string(), 
+                        max: "21000".to_string(), 
+                        lim: "1000".to_string(), 
+                        dec: "0".to_string(), 
+                        address: "3K9KZZPB8NRwZVP5wNKX4VYhnswrJxpgZ4".to_string(), 
+                        inscription_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string(), 
+                        self_mint: false
+                    })))
+                    .build()
+                )
+            .build();
+        write_augmented_block_to_brc20_db(&block, sqlite_dbs.brc20.as_ref().unwrap(), &ctx);
+
+        let deploy = get_token("ordi", sqlite_dbs.brc20.as_ref().unwrap(), &ctx).unwrap();
+        assert_eq!(
+            deploy.inscription_id,
+            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0"
+        );
+        assert_eq!(deploy.tick, "ordi");
+        assert_eq!(deploy.display_tick, "ordi");
+        assert_eq!(deploy.max, 21000.0);
+        assert_eq!(deploy.lim, 1000.0);
+        assert_eq!(deploy.dec, 0);
+        assert_eq!(deploy.inscription_number, 0);
+        assert_eq!(deploy.address, "3K9KZZPB8NRwZVP5wNKX4VYhnswrJxpgZ4");
+    }
 }

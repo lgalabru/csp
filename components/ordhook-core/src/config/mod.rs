@@ -1,5 +1,3 @@
-use crate::core::OrdhookConfig;
-pub use chainhook_sdk::indexer::IndexerConfig;
 use chainhook_sdk::observer::EventObserverConfig;
 use chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
@@ -8,6 +6,8 @@ use std::path::PathBuf;
 
 const DEFAULT_MAINNET_ORDINALS_SQLITE_ARCHIVE: &str =
     "https://archive.hiro.so/mainnet/ordhook/mainnet-ordhook-sqlite-latest";
+const DEFAULT_MAINNET_BRC20_SQLITE_ARCHIVE: &str =
+    "https://archive.hiro.so/mainnet/ordhook/mainnet-ordhook-brc20-latest";
 
 pub const DEFAULT_INGESTION_PORT: u16 = 20455;
 pub const DEFAULT_CONTROL_PORT: u16 = 20456;
@@ -42,6 +42,7 @@ pub struct LogConfig {
 #[derive(Clone, Debug)]
 pub struct StorageConfig {
     pub working_dir: String,
+    pub observers_working_dir: String,
 }
 
 #[derive(Clone, Debug)]
@@ -57,9 +58,15 @@ pub struct PredicatesApiConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct SnapshotConfigDownloadUrls {
+    pub ordinals: String,
+    pub brc20: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub enum SnapshotConfig {
     Build,
-    Download(String),
+    Download(SnapshotConfigDownloadUrls),
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +77,16 @@ pub struct PathConfig {
 #[derive(Clone, Debug)]
 pub struct UrlConfig {
     pub file_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexerConfig {
+    pub bitcoin_network: BitcoinNetwork,
+    pub bitcoind_rpc_url: String,
+    pub bitcoind_rpc_username: String,
+    pub bitcoind_rpc_password: String,
+    pub bitcoin_block_signaling: BitcoinBlockSignaling,
+    pub prometheus_monitoring_port: Option<u16>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -100,21 +117,6 @@ impl Config {
         }
     }
 
-    pub fn get_ordhook_config(&self) -> OrdhookConfig {
-        OrdhookConfig {
-            resources: self.resources.clone(),
-            db_path: self.expected_cache_path(),
-            first_inscription_height: match self.network.bitcoin_network {
-                BitcoinNetwork::Mainnet => 767430,
-                BitcoinNetwork::Regtest => 1,
-                BitcoinNetwork::Testnet => 2413343,
-                BitcoinNetwork::Signet => 112402,
-            },
-            logs: self.logs.clone(),
-            meta_protocols: self.meta_protocols.clone(),
-        }
-    }
-
     pub fn get_event_observer_config(&self) -> EventObserverConfig {
         EventObserverConfig {
             bitcoin_rpc_proxy_enabled: true,
@@ -127,7 +129,7 @@ impl Config {
             display_logs: false,
             cache_path: self.storage.working_dir.clone(),
             bitcoin_network: self.network.bitcoin_network.clone(),
-            stacks_network: self.network.stacks_network.clone(),
+            stacks_network: StacksNetwork::Devnet,
             prometheus_monitoring_port: None,
             data_handler_tx: None,
         }
@@ -153,25 +155,17 @@ impl Config {
         destination_path
     }
 
-    fn expected_remote_ordinals_sqlite_base_url(&self) -> &str {
-        match &self.snapshot {
-            SnapshotConfig::Build => unreachable!(),
-            SnapshotConfig::Download(url) => &url,
-        }
-    }
-
-    pub fn expected_remote_ordinals_sqlite_sha256(&self) -> String {
-        format!("{}.sha256", self.expected_remote_ordinals_sqlite_base_url())
-    }
-
-    pub fn expected_remote_ordinals_sqlite_url(&self) -> String {
-        format!("{}.tar.gz", self.expected_remote_ordinals_sqlite_base_url())
+    pub fn expected_observers_cache_path(&self) -> PathBuf {
+        let mut destination_path = PathBuf::new();
+        destination_path.push(&self.storage.observers_working_dir);
+        destination_path
     }
 
     pub fn devnet_default() -> Config {
         Config {
             storage: StorageConfig {
                 working_dir: default_cache_path(),
+                observers_working_dir: default_observers_cache_path(),
             },
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
@@ -191,8 +185,8 @@ impl Config {
                 bitcoin_block_signaling: BitcoinBlockSignaling::Stacks(
                     StacksNodeConfig::default_localhost(DEFAULT_INGESTION_PORT),
                 ),
-                stacks_network: StacksNetwork::Devnet,
                 bitcoin_network: BitcoinNetwork::Regtest,
+                prometheus_monitoring_port: None,
             },
             logs: LogConfig {
                 ordinals_internals: true,
@@ -206,6 +200,7 @@ impl Config {
         Config {
             storage: StorageConfig {
                 working_dir: default_cache_path(),
+                observers_working_dir: default_observers_cache_path(),
             },
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
@@ -225,8 +220,8 @@ impl Config {
                 bitcoin_block_signaling: BitcoinBlockSignaling::Stacks(
                     StacksNodeConfig::default_localhost(DEFAULT_INGESTION_PORT),
                 ),
-                stacks_network: StacksNetwork::Testnet,
                 bitcoin_network: BitcoinNetwork::Testnet,
+                prometheus_monitoring_port: Some(9153),
             },
             logs: LogConfig {
                 ordinals_internals: true,
@@ -240,9 +235,13 @@ impl Config {
         Config {
             storage: StorageConfig {
                 working_dir: default_cache_path(),
+                observers_working_dir: default_observers_cache_path(),
             },
             http_api: PredicatesApi::Off,
-            snapshot: SnapshotConfig::Download(DEFAULT_MAINNET_ORDINALS_SQLITE_ARCHIVE.to_string()),
+            snapshot: SnapshotConfig::Download(SnapshotConfigDownloadUrls {
+                ordinals: DEFAULT_MAINNET_ORDINALS_SQLITE_ARCHIVE.to_string(),
+                brc20: Some(DEFAULT_MAINNET_BRC20_SQLITE_ARCHIVE.to_string()),
+            }),
             resources: ResourcesConfig {
                 cpu_core_available: num_cpus::get(),
                 memory_available: DEFAULT_MEMORY_AVAILABLE,
@@ -259,8 +258,8 @@ impl Config {
                 bitcoin_block_signaling: BitcoinBlockSignaling::Stacks(
                     StacksNodeConfig::default_localhost(DEFAULT_INGESTION_PORT),
                 ),
-                stacks_network: StacksNetwork::Mainnet,
                 bitcoin_network: BitcoinNetwork::Mainnet,
+                prometheus_monitoring_port: Some(9153),
             },
             logs: LogConfig {
                 ordinals_internals: true,
@@ -269,10 +268,25 @@ impl Config {
             meta_protocols: MetaProtocolsConfig { brc20: false },
         }
     }
+
+    #[cfg(test)]
+    pub fn test_default() -> Config {
+        let mut config = Self::mainnet_default();
+        config.storage.working_dir = "tmp".to_string();
+        config.resources.bitcoind_rpc_threads = 1;
+        config.resources.cpu_core_available = 1;
+        config
+    }
 }
 
 pub fn default_cache_path() -> String {
     let mut cache_path = std::env::current_dir().expect("unable to get current dir");
     cache_path.push("ordhook");
+    format!("{}", cache_path.display())
+}
+
+pub fn default_observers_cache_path() -> String {
+    let mut cache_path = std::env::current_dir().expect("unable to get current dir");
+    cache_path.push("observers");
     format!("{}", cache_path.display())
 }

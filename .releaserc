@@ -1,27 +1,32 @@
 {
-    "branches": [
-        "main"
+  "branches": [
+    "main",
+    {
+      "name": "beta",
+      "channel": "beta",
+      "prerelease": true
+    }
+  ],
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits"
+      }
     ],
-    "plugins": [
-        [
-            "@semantic-release/commit-analyzer",
-            {
-                "preset": "conventionalcommits"
-            }
-        ],
-        [
-            "@semantic-release/release-notes-generator",
-            {
-                "preset": "conventionalcommits"
-            }
-        ],
-        [
-          "@semantic-release/github",
-          {
-            "successComment": false
-          }
-        ],
-        "@semantic-release/changelog",
-        "@semantic-release/git"
-    ]
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "successComment": false
+      }
+    ],
+    "@semantic-release/changelog",
+    "@semantic-release/git"
+  ]
 }

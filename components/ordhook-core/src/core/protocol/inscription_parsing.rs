@@ -11,6 +11,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
+use crate::config::Config;
 use crate::core::meta_protocols::brc20::brc20_activation_height;
 use crate::core::meta_protocols::brc20::parser::{parse_brc20_operation, ParsedBrc20Operation};
 use crate::ord::envelope::{Envelope, ParsedEnvelope, RawEnvelope};
@@ -24,11 +25,6 @@ pub fn parse_inscriptions_from_witness(
     witness_bytes: Vec<Vec<u8>>,
     txid: &str,
 ) -> Option<Vec<(OrdinalInscriptionRevealData, Inscription)>> {
-    // Efficient debugging: Isolate one specific transaction
-    // if !txid.eq("aa2ab56587c7d6609c95157e6dff37c5c3fa6531702f41229a289a5613887077") {
-    //     return None
-    // }
-
     let witness = Witness::from_slice(&witness_bytes);
     let tapscript = witness.tapscript()?;
     let envelopes: Vec<Envelope<Inscription>> = RawEnvelope::from_tapscript(tapscript, input_index)
@@ -116,6 +112,7 @@ pub fn parse_inscriptions_from_standardized_tx(
     block_identifier: &BlockIdentifier,
     network: &BitcoinNetwork,
     brc20_operation_map: &mut HashMap<String, ParsedBrc20Operation>,
+    config: &Config,
     ctx: &Context,
 ) -> Vec<OrdinalOperation> {
     let mut operations = vec![];
@@ -132,7 +129,9 @@ pub fn parse_inscriptions_from_standardized_tx(
             tx.transaction_identifier.get_hash_bytes_str(),
         ) {
             for (reveal, inscription) in inscriptions.into_iter() {
-                if block_identifier.index >= brc20_activation_height(&network) {
+                if config.meta_protocols.brc20
+                    && block_identifier.index >= brc20_activation_height(&network)
+                {
                     match parse_brc20_operation(&inscription) {
                         Ok(Some(op)) => {
                             brc20_operation_map.insert(reveal.inscription_id.clone(), op);
@@ -174,23 +173,6 @@ pub fn parse_inscriptions_in_raw_tx(
     operations
 }
 
-// #[test]
-// fn test_ordinal_inscription_parsing() {
-//     let bytes = hex::decode("208737bc46923c3e64c7e6768c0346879468bf3aba795a5f5f56efca288f50ed2aac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004c9948656c6c6f2030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030300a68").unwrap();
-
-//     let script = Script::from(bytes);
-//     let parser = InscriptionParser {
-//         instructions: script.instructions().peekable(),
-//     };
-
-//     let inscription = match parser.parse_script() {
-//         Ok(inscription) => inscription,
-//         Err(_) => panic!(),
-//     };
-
-//     println!("{:?}", inscription);
-// }
-
 pub fn parse_inscriptions_and_standardize_block(
     raw_block: BitcoinBlockFullBreakdown,
     network: &BitcoinNetwork,
@@ -217,6 +199,7 @@ pub fn parse_inscriptions_and_standardize_block(
 pub fn parse_inscriptions_in_standardized_block(
     block: &mut BitcoinBlockData,
     brc20_operation_map: &mut HashMap<String, ParsedBrc20Operation>,
+    config: &Config,
     ctx: &Context,
 ) {
     for tx in block.transactions.iter_mut() {
@@ -225,6 +208,7 @@ pub fn parse_inscriptions_in_standardized_block(
             &block.block_identifier,
             &block.metadata.network,
             brc20_operation_map,
+            config,
             ctx,
         );
     }
@@ -256,4 +240,164 @@ pub fn get_inscriptions_transferred_in_block(
         }
     }
     ops
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use chainhook_sdk::{
+        bitcoin::Amount,
+        indexer::bitcoin::{
+            BitcoinBlockFullBreakdown, BitcoinTransactionFullBreakdown,
+            BitcoinTransactionInputFullBreakdown, BitcoinTransactionInputPrevoutFullBreakdown,
+            GetRawTransactionResultVinScriptSig,
+        },
+        types::{
+            BitcoinBlockData, BitcoinNetwork, BitcoinTransactionData,
+            OrdinalInscriptionTransferData, OrdinalInscriptionTransferDestination,
+            OrdinalOperation,
+        },
+        utils::Context,
+    };
+
+    use test_case::test_case;
+
+    use crate::{
+        config::Config,
+        core::test_builders::{TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder},
+    };
+
+    use super::{
+        get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
+        parse_inscriptions_and_standardize_block, parse_inscriptions_in_standardized_block,
+    };
+
+    pub fn new_test_transfer_tx_with_operation() -> BitcoinTransactionData {
+        TestTransactionBuilder::new()
+            .ordinal_operations(vec![OrdinalOperation::InscriptionTransferred(
+                OrdinalInscriptionTransferData {
+                    ordinal_number: 300144140535834,
+                    destination: OrdinalInscriptionTransferDestination::Transferred(
+                        "bc1pcwway0ne322s0lrc5e905f3chuclvnyy3z6wn86azkgmgcprf3tqvyy7ws"
+                            .to_string(),
+                    ),
+                    satpoint_pre_transfer:
+                        "ab2683db34e335c89a5c1d634e6c5bd8d8bca8ded281be84f71f921c9e8783b2:0:0"
+                            .to_string(),
+                    satpoint_post_transfer:
+                        "42fa098abab8d5cca1c303a97bd0404cf8e9b8faaab6dd228a309e66daff8fae:1:0"
+                            .to_string(),
+                    post_transfer_output_value: Some(546),
+                    tx_index: 54,
+                },
+            )])
+            .build()
+    }
+
+    pub fn new_test_raw_block(
+        transactions: Vec<BitcoinTransactionFullBreakdown>,
+    ) -> BitcoinBlockFullBreakdown {
+        BitcoinBlockFullBreakdown {
+            hash: "000000000000000000018ddf8a6484db391fb85c9f9ddc384f03a92729423aaf".to_string(),
+            height: 838964,
+            tx: transactions,
+            time: 1712982301,
+            nonce: 100,
+            previousblockhash: Some(
+                "000000000000000000021f8b96d34c0f223281d7d825dd3588c2858c96e689d4".to_string(),
+            ),
+            confirmations: 200,
+        }
+    }
+
+    pub fn new_test_reveal_raw_tx() -> BitcoinTransactionFullBreakdown {
+        BitcoinTransactionFullBreakdown {
+            txid: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
+            vin: vec![BitcoinTransactionInputFullBreakdown {
+                sequence: 4294967293,
+                txid: Some("a321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac".to_string()),
+                vout: Some(0),
+                script_sig: Some(GetRawTransactionResultVinScriptSig { hex: "".to_string()}),
+                txinwitness: Some(vec![
+                    "6c00eb3c4d35fedd257051333b4ca81d1a25a37a9af4891f1fec2869edd56b14180eafbda8851d63138a724c9b15384bc5f0536de658bd294d426a36212e6f08".to_string(),
+                    "209e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004c5e7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d68".to_string(),
+                    "c19e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746".to_string(),
+                ]),
+                prevout: Some(
+                    BitcoinTransactionInputPrevoutFullBreakdown { height: 779878, value: Amount::from_sat(14830) }
+                ),
+            }],
+            vout: vec![],
+        }
+    }
+
+    #[test_case(&TestBlockBuilder::new().build() => 0; "with empty block")]
+    #[test_case(&TestBlockBuilder::new().transactions(vec![TestTransactionBuilder::new_with_operation().build()]).build() => 1; "with reveal transaction")]
+    #[test_case(&TestBlockBuilder::new().transactions(vec![new_test_transfer_tx_with_operation()]).build() => 0; "with transfer transaction")]
+    fn gets_reveals_in_block(block: &BitcoinBlockData) -> usize {
+        get_inscriptions_revealed_in_block(block).len()
+    }
+
+    #[test_case(&TestBlockBuilder::new().build() => 0; "with empty block")]
+    #[test_case(&TestBlockBuilder::new().transactions(vec![TestTransactionBuilder::new_with_operation().build()]).build() => 0; "with reveal transaction")]
+    #[test_case(&TestBlockBuilder::new().transactions(vec![new_test_transfer_tx_with_operation()]).build() => 1; "with transfer transaction")]
+    fn gets_transfers_in_block(block: &BitcoinBlockData) -> usize {
+        get_inscriptions_transferred_in_block(block).len()
+    }
+
+    #[test]
+    fn parses_inscriptions_in_block() {
+        let ctx = Context::empty();
+        let config = Config::test_default();
+        let mut block = TestBlockBuilder::new()
+            .add_transaction(
+                TestTransactionBuilder::new()
+                    .add_input(
+                        TestTxInBuilder::new()
+                            .witness(vec![
+                                "0x6c00eb3c4d35fedd257051333b4ca81d1a25a37a9af4891f1fec2869edd56b14180eafbda8851d63138a724c9b15384bc5f0536de658bd294d426a36212e6f08".to_string(),
+                                "0x209e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004c5e7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d68".to_string(),
+                                "0xc19e2849b90a2353691fccedd467215c88eec89a5d0dcf468e6cf37abed344d746".to_string(),
+                            ])
+                            .build()
+                    )
+                    .build(),
+            )
+            .build();
+        parse_inscriptions_in_standardized_block(&mut block, &mut HashMap::new(), &config, &ctx);
+        let OrdinalOperation::InscriptionRevealed(reveal) =
+            &block.transactions[0].metadata.ordinal_operations[0]
+        else {
+            panic!();
+        };
+        assert_eq!(
+            reveal.inscription_id,
+            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string()
+        );
+        assert_eq!(reveal.content_bytes, "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string());
+        assert_eq!(reveal.content_length, 94);
+    }
+
+    #[test]
+    fn parses_inscriptions_in_raw_block() {
+        let raw_block = new_test_raw_block(vec![new_test_reveal_raw_tx()]);
+        let block = parse_inscriptions_and_standardize_block(
+            raw_block,
+            &BitcoinNetwork::Mainnet,
+            &Context::empty(),
+        )
+        .unwrap();
+        let OrdinalOperation::InscriptionRevealed(reveal) =
+            &block.transactions[0].metadata.ordinal_operations[0]
+        else {
+            panic!();
+        };
+        assert_eq!(
+            reveal.inscription_id,
+            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string()
+        );
+        assert_eq!(reveal.content_bytes, "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string());
+        assert_eq!(reveal.content_length, 94);
+    }
 }

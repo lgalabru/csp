@@ -1,12 +1,12 @@
-use ordhook::chainhook_sdk::indexer::IndexerConfig;
 use ordhook::chainhook_sdk::observer::DEFAULT_INGESTION_PORT;
 use ordhook::chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
 };
 use ordhook::config::{
-    Config, LogConfig, MetaProtocolsConfig, PredicatesApi, PredicatesApiConfig, ResourcesConfig,
-    SnapshotConfig, StorageConfig, DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT,
-    DEFAULT_BRC20_LRU_CACHE_SIZE, DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
+    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, PredicatesApi, PredicatesApiConfig,
+    ResourcesConfig, SnapshotConfig, SnapshotConfigDownloadUrls, StorageConfig,
+    DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE,
+    DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
 };
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -42,7 +42,7 @@ impl ConfigFile {
     }
 
     pub fn from_config_file(config_file: ConfigFile) -> Result<Config, String> {
-        let (stacks_network, bitcoin_network) = match config_file.network.mode.as_str() {
+        let (_, bitcoin_network) = match config_file.network.mode.as_str() {
             "devnet" => (StacksNetwork::Devnet, BitcoinNetwork::Regtest),
             "testnet" => (StacksNetwork::Testnet, BitcoinNetwork::Testnet),
             "mainnet" => (StacksNetwork::Mainnet, BitcoinNetwork::Mainnet),
@@ -51,8 +51,11 @@ impl ConfigFile {
         };
 
         let snapshot = match config_file.snapshot {
-            Some(bootstrap) => match bootstrap.download_url {
-                Some(ref url) => SnapshotConfig::Download(url.to_string()),
+            Some(bootstrap) => match bootstrap.ordinals_url {
+                Some(ref url) => SnapshotConfig::Download(SnapshotConfigDownloadUrls {
+                    ordinals: url.to_string(),
+                    brc20: bootstrap.brc20_url,
+                }),
                 None => SnapshotConfig::Build,
             },
             None => SnapshotConfig::Build,
@@ -61,6 +64,10 @@ impl ConfigFile {
         let config = Config {
             storage: StorageConfig {
                 working_dir: config_file.storage.working_dir.unwrap_or("ordhook".into()),
+                observers_working_dir: config_file
+                    .storage
+                    .observers_working_dir
+                    .unwrap_or("observers".into()),
             },
             http_api: match config_file.http_api {
                 None => PredicatesApi::Off,
@@ -107,14 +114,11 @@ impl ConfigFile {
                 bitcoin_block_signaling: match config_file.network.bitcoind_zmq_url {
                     Some(ref zmq_url) => BitcoinBlockSignaling::ZeroMQ(zmq_url.clone()),
                     None => BitcoinBlockSignaling::Stacks(StacksNodeConfig::default_localhost(
-                        config_file
-                            .network
-                            .stacks_events_ingestion_port
-                            .unwrap_or(DEFAULT_INGESTION_PORT),
+                        DEFAULT_INGESTION_PORT,
                     )),
                 },
-                stacks_network,
                 bitcoin_network,
+                prometheus_monitoring_port: config_file.network.prometheus_monitoring_port,
             },
             logs: LogConfig {
                 ordinals_internals: config_file
@@ -144,14 +148,21 @@ impl ConfigFile {
         testnet: bool,
         mainnet: bool,
         config_path: &Option<String>,
+        meta_protocols: &Option<String>,
     ) -> Result<Config, String> {
-        let config = match (devnet, testnet, mainnet, config_path) {
+        let mut config = match (devnet, testnet, mainnet, config_path) {
             (true, false, false, _) => Config::devnet_default(),
             (false, true, false, _) => Config::testnet_default(),
             (false, false, true, _) => Config::mainnet_default(),
             (false, false, false, Some(config_path)) => ConfigFile::from_file_path(config_path)?,
             _ => Err("Invalid combination of arguments".to_string())?,
         };
+        if let Some(meta_protocols) = meta_protocols {
+            match meta_protocols.as_str() {
+                "brc20" => config.meta_protocols.brc20 = true,
+                _ => Err("Invalid meta protocol".to_string())?,
+            }
+        }
         Ok(config)
     }
 }
@@ -165,6 +176,7 @@ pub struct LogConfigFile {
 #[derive(Deserialize, Debug, Clone)]
 pub struct StorageConfigFile {
     pub working_dir: Option<String>,
+    pub observers_working_dir: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -177,7 +189,8 @@ pub struct PredicatesApiConfigFile {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct SnapshotConfigFile {
-    pub download_url: Option<String>,
+    pub ordinals_url: Option<String>,
+    pub brc20_url: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -203,6 +216,5 @@ pub struct NetworkConfigFile {
     pub bitcoind_rpc_username: String,
     pub bitcoind_rpc_password: String,
     pub bitcoind_zmq_url: Option<String>,
-    pub stacks_node_rpc_url: Option<String>,
-    pub stacks_events_ingestion_port: Option<u16>,
+    pub prometheus_monitoring_port: Option<u16>,
 }
