@@ -1,3 +1,33 @@
+## [2.2.5](https://github.com/hirosystems/ordhook/compare/v2.2.4...v2.2.5) (2024-07-23)
+
+
+### Bug Fixes
+
+* abort scan on predicate action error ([#345](https://github.com/hirosystems/ordhook/issues/345)) ([7ee763a](https://github.com/hirosystems/ordhook/commit/7ee763a263a3cf0202cf8da5f0903cfc94fdc137))
+* validate and wait for bitcoind block height responses ([#340](https://github.com/hirosystems/ordhook/issues/340)) ([b28b92e](https://github.com/hirosystems/ordhook/commit/b28b92ebab149bf40ce102556fe194653cad81c8))
+
+## [2.2.4](https://github.com/hirosystems/ordhook/compare/v2.2.3...v2.2.4) (2024-06-26)
+
+
+### Bug Fixes
+
+* release 2.2.4 ([6a8a63a](https://github.com/hirosystems/ordhook/commit/6a8a63a01dcca7544f4090877cae7cc8af16b2ce))
+
+## [2.2.3](https://github.com/hirosystems/ordhook/compare/v2.2.2...v2.2.3) (2024-06-26)
+
+
+### Bug Fixes
+
+* nested readwrite connection ([#327](https://github.com/hirosystems/ordhook/issues/327)) ([a593995](https://github.com/hirosystems/ordhook/commit/a593995e606c10de0b7145a5e003cd18743d32c6))
+
+## [2.2.2](https://github.com/hirosystems/ordhook/compare/v2.2.1...v2.2.2) (2024-06-18)
+
+
+### Bug Fixes
+
+* augment brc20 tx by tx_index ([#315](https://github.com/hirosystems/ordhook/issues/315)) ([122bfdf](https://github.com/hirosystems/ordhook/commit/122bfdfd80c21242c8b46055d4f924387f909919))
+* retrieving block height from inscriptions db ([6c9ea06](https://github.com/hirosystems/ordhook/commit/6c9ea060ef9c6fbb944203e764e42e1b5d75ee5d))
+
 ## [2.2.1](https://github.com/hirosystems/ordhook/compare/v2.2.0...v2.2.1) (2024-06-11)
 
 
