@@ -35,6 +35,7 @@ use crate::db::{drop_block_data_from_all_dbs, open_all_dbs_rw};
 use crate::scan::bitcoin::process_block_with_predicates;
 use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
 use crate::service::runloops::start_bitcoin_scan_runloop;
+use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_debug, try_error, try_info};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
@@ -404,6 +405,7 @@ impl Service {
     }
 
     pub async fn check_blocks_db_integrity(&mut self) -> Result<(), String> {
+        bitcoind_wait_for_chain_tip(&self.config, &self.ctx);
         let (tip, missing_blocks) = {
             let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
 
@@ -446,7 +448,10 @@ impl Service {
         &self,
         block_post_processor: Option<crossbeam_channel::Sender<BitcoinBlockData>>,
     ) -> Result<(), String> {
-        // 1: Catch up blocks DB so it is at the same height as the ordinals DB.
+        // 0: Make sure bitcoind is synchronized.
+        bitcoind_wait_for_chain_tip(&self.config, &self.ctx);
+
+        // 1: Catch up blocks DB so it is at least at the same height as the ordinals DB.
         if let Some((start_block, end_block)) = should_sync_rocks_db(&self.config, &self.ctx)? {
             let blocks_post_processor = start_block_archiving_processor(
                 &self.config,
@@ -472,7 +477,8 @@ impl Service {
             .await?;
         }
 
-        // 2: Catch up ordinals DB until it reaches bitcoind block height. This will also advance blocks DB.
+        // 2: Catch up ordinals DB until it reaches bitcoind block height. This will also advance blocks DB and BRC-20 DB if
+        // enabled.
         let mut last_block_processed = 0;
         while let Some((start_block, end_block, speed)) =
             should_sync_ordhook_db(&self.config, &self.ctx)?
@@ -502,7 +508,6 @@ impl Service {
                 &self.ctx,
             )
             .await?;
-
             last_block_processed = end_block;
         }
 
