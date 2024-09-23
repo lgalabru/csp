@@ -42,8 +42,8 @@ use crate::{
         blocks::open_blocks_db_with_retry,
         cursor::TransactionBytesCursor,
         ordinals::{
-            get_any_entry_in_ordinal_activities, get_latest_indexed_inscription_number,
-            open_ordinals_db, open_ordinals_db_rw,
+            delete_inscriptions_in_block_range, get_any_entry_in_ordinal_activities,
+            get_latest_indexed_inscription_number, open_ordinals_db, open_ordinals_db_rw,
         },
     },
     service::write_brc20_block_operations,
@@ -248,9 +248,22 @@ pub fn process_blocks(
                     if let Some(brc20_db_tx) = brc20_db_tx {
                         match brc20_db_tx.commit() {
                             Ok(_) => {}
-                            Err(_) => {
-                                // TODO: Synchronize rollbacks and commits between BRC-20 and inscription DBs.
-                                todo!()
+                            Err(e) => {
+                                // We will roll back the ordinals DB changes and panic so we can try the index again on next
+                                // restart.
+                                try_error!(
+                                    ctx,
+                                    "Unable to write BRC-20 index for block #{}: {}",
+                                    block.block_identifier.index,
+                                    e.to_string()
+                                );
+                                delete_inscriptions_in_block_range(
+                                    block.block_identifier.index as u32,
+                                    block.block_identifier.index as u32,
+                                    inscriptions_db_conn_rw,
+                                    ctx,
+                                );
+                                panic!("BRC-20 DB transaction commit failed");
                             }
                         }
                     }
@@ -258,10 +271,11 @@ pub fn process_blocks(
                 Err(e) => {
                     try_error!(
                         ctx,
-                        "Unable to update changes in block #{}: {}",
+                        "Unable to write index for block #{}: {}",
                         block.block_identifier.index,
                         e.to_string()
                     );
+                    panic!("Ordinals DB transaction commit failed");
                 }
             }
         }
