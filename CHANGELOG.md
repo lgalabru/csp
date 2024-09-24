@@ -1,3 +1,10 @@
+## [3.0.0-beta.2](https://github.com/hirosystems/ordhook/compare/v3.0.0-beta.1...v3.0.0-beta.2) (2024-09-24)
+
+
+### Bug Fixes
+
+* roll back ordinals db changes when brc20 db commit fails ([#367](https://github.com/hirosystems/ordhook/issues/367)) ([f4e0c79](https://github.com/hirosystems/ordhook/commit/f4e0c7935b825d2119d20c5acf08d289fe231423))
+
 ## [3.0.0-beta.1](https://github.com/hirosystems/ordhook/compare/v2.2.5...v3.0.0-beta.1) (2024-09-20)
 
 
