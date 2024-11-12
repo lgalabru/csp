@@ -503,7 +503,9 @@ name = "chainhook-postgres"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "chainhook-sdk",
  "num-traits",
+ "slog",
  "test-case",
  "tokio",
  "tokio-postgres",

@@ -3,7 +3,56 @@ pub mod pg_numeric_u128;
 pub mod pg_numeric_u64;
 pub mod pg_smallint_u8;
 
+use chainhook_sdk::utils::Context;
 pub use tokio_postgres;
+
+use tokio_postgres::{Client, Config, NoTls};
+
+pub async fn pg_connect(
+    dbname: &String,
+    host: &String,
+    port: u16,
+    user: &String,
+    password: Option<&String>,
+    ctx: &Context,
+) -> Result<Client, String> {
+    let mut pg_config = Config::new();
+    pg_config.dbname(dbname).host(host).port(port).user(user);
+    if let Some(password) = password {
+        pg_config.password(password);
+    }
+    match pg_config.connect(NoTls).await {
+        Ok((client, connection)) => {
+            let moved_ctx = ctx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    moved_ctx.try_log(|l| slog::error!(l, "Postgres connection error: {e}"));
+                }
+            });
+            Ok(client)
+        }
+        Err(e) => Err(format!("Error connecting to postgres: {e}"))
+    }
+}
+
+pub async fn pg_connect_with_retry(
+    dbname: &String,
+    host: &String,
+    port: u16,
+    user: &String,
+    password: Option<&String>,
+    ctx: &Context,
+) -> Client {
+    loop {
+        match pg_connect(dbname, host, port, user, password, ctx).await {
+            Ok(client) => return client,
+            Err(e) => {
+                ctx.try_log(|l| slog::error!(l, "Error connecting to postgres: {e}"));
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            },
+        }
+    }
+}
 
 #[cfg(test)]
 pub async fn pg_test_client() -> tokio_postgres::Client {

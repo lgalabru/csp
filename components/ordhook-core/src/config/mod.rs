@@ -21,6 +21,7 @@ pub const DEFAULT_BRC20_LRU_CACHE_SIZE: usize = 50_000;
 pub struct Config {
     pub storage: StorageConfig,
     pub ordinals_db: PostgresConfig,
+    pub brc20_db: Option<PostgresConfig>,
     pub http_api: PredicatesApi,
     pub resources: ResourcesConfig,
     pub network: IndexerConfig,
@@ -184,6 +185,7 @@ impl Config {
                 username: "postgres".to_string(),
                 password: Some("postgres".to_string()),
             },
+            brc20_db: None,
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
@@ -226,6 +228,7 @@ impl Config {
                 username: "postgres".to_string(),
                 password: Some("postgres".to_string()),
             },
+            brc20_db: None,
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
@@ -268,6 +271,7 @@ impl Config {
                 username: "postgres".to_string(),
                 password: Some("postgres".to_string()),
             },
+            brc20_db: None,
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Download(SnapshotConfigDownloadUrls {
                 ordinals: DEFAULT_MAINNET_ORDINALS_SQLITE_ARCHIVE.to_string(),

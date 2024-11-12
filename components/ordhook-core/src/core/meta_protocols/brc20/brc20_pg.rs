@@ -1,7 +1,7 @@
 use chainhook_postgres::tokio_postgres::Client;
 use refinery::embed_migrations;
 
-embed_migrations!("../../migrations/ordinals");
+embed_migrations!("../../migrations/ordinals-brc20");
 pub async fn migrate(pg_client: &mut Client) -> Result<(), String> {
     return match migrations::runner()
         .set_migration_table_name("pgmigrations")

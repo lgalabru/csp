@@ -5,6 +5,7 @@ pub mod ordinals_pg;
 
 use blocks::{delete_blocks_in_block_range, open_blocks_db_with_retry};
 
+use chainhook_postgres::pg_connect_with_retry;
 use ordinals::{delete_inscriptions_in_block_range, initialize_ordinals_db, open_ordinals_db_rw};
 use rocksdb::DB;
 use rusqlite::Connection;
@@ -13,11 +14,42 @@ use chainhook_sdk::utils::Context;
 
 use crate::{
     config::Config,
-    core::meta_protocols::brc20::db::{
-        brc20_new_rw_db_conn, delete_activity_in_block_range, initialize_brc20_db,
+    core::meta_protocols::brc20::{
+        brc20_pg,
+        db::{brc20_new_rw_db_conn, delete_activity_in_block_range, initialize_brc20_db},
     },
     try_info,
 };
+
+pub async fn migrate_dbs(config: &Config, ctx: &Context) -> Result<(), String> {
+    {
+        try_info!(ctx, "Running ordinals DB migrations");
+        let mut pg_client = pg_connect_with_retry(
+            &config.ordinals_db.database,
+            &config.ordinals_db.host,
+            config.ordinals_db.port,
+            &config.ordinals_db.username,
+            config.ordinals_db.password.as_ref(),
+            ctx,
+        )
+        .await;
+        ordinals_pg::migrate(&mut pg_client).await?;
+    }
+    if let (Some(brc20_db), true) = (&config.brc20_db, config.meta_protocols.brc20) {
+        try_info!(ctx, "Running brc20 DB migrations");
+        let mut pg_client = pg_connect_with_retry(
+            &brc20_db.database,
+            &brc20_db.host,
+            brc20_db.port,
+            &brc20_db.username,
+            brc20_db.password.as_ref(),
+            ctx,
+        )
+        .await;
+        brc20_pg::migrate(&mut pg_client).await?;
+    }
+    Ok(())
+}
 
 pub struct SqliteDbConnections {
     pub ordinals: Connection,

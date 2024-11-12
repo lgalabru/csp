@@ -1,5 +1,6 @@
 use chainhook_sdk::types::BitcoinNetwork;
 
+pub mod brc20_pg;
 pub mod cache;
 pub mod db;
 pub mod parser;

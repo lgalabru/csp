@@ -15,6 +15,7 @@ use std::io::{BufReader, Read};
 pub struct ConfigFile {
     pub storage: StorageConfigFile,
     pub ordinals_db: PostgresConfigFile,
+    pub brc20_db: Option<PostgresConfigFile>,
     pub http_api: Option<PredicatesApiConfigFile>,
     pub resources: ResourcesConfigFile,
     pub network: NetworkConfigFile,
@@ -76,6 +77,16 @@ impl ConfigFile {
                 port: config_file.ordinals_db.port,
                 username: config_file.ordinals_db.username,
                 password: config_file.ordinals_db.password,
+            },
+            brc20_db: match config_file.brc20_db {
+                Some(brc20_db) => Some(PostgresConfig {
+                    database: brc20_db.database,
+                    host: brc20_db.host,
+                    port: brc20_db.port,
+                    username: brc20_db.username,
+                    password: brc20_db.password,
+                }),
+                None => None,
             },
             http_api: match config_file.http_api {
                 None => PredicatesApi::Off,
