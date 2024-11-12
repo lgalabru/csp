@@ -3,10 +3,10 @@ use ordhook::chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
 };
 use ordhook::config::{
-    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, PredicatesApi, PredicatesApiConfig,
-    ResourcesConfig, SnapshotConfig, SnapshotConfigDownloadUrls, StorageConfig,
-    DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE,
-    DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
+    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, PostgresConfig, PredicatesApi,
+    PredicatesApiConfig, ResourcesConfig, SnapshotConfig, SnapshotConfigDownloadUrls,
+    StorageConfig, DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT,
+    DEFAULT_BRC20_LRU_CACHE_SIZE, DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
 };
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -14,6 +14,7 @@ use std::io::{BufReader, Read};
 #[derive(Deserialize, Debug, Clone)]
 pub struct ConfigFile {
     pub storage: StorageConfigFile,
+    pub ordinals_db: PostgresConfigFile,
     pub http_api: Option<PredicatesApiConfigFile>,
     pub resources: ResourcesConfigFile,
     pub network: NetworkConfigFile,
@@ -68,6 +69,13 @@ impl ConfigFile {
                     .storage
                     .observers_working_dir
                     .unwrap_or("observers".into()),
+            },
+            ordinals_db: PostgresConfig {
+                database: config_file.ordinals_db.database,
+                host: config_file.ordinals_db.host,
+                port: config_file.ordinals_db.port,
+                username: config_file.ordinals_db.username,
+                password: config_file.ordinals_db.password,
             },
             http_api: match config_file.http_api {
                 None => PredicatesApi::Off,
@@ -171,6 +179,15 @@ impl ConfigFile {
 pub struct LogConfigFile {
     pub ordinals_internals: Option<bool>,
     pub chainhook_internals: Option<bool>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostgresConfigFile {
+    pub database: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

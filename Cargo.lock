@@ -504,7 +504,6 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "num-traits",
- "refinery",
  "test-case",
  "tokio",
  "tokio-postgres",
@@ -2446,6 +2445,7 @@ dependencies = [
  "ansi_term",
  "anyhow",
  "atty",
+ "chainhook-postgres",
  "chainhook-sdk",
  "ciborium",
  "crossbeam-channel",
@@ -2465,6 +2465,7 @@ dependencies = [
  "progressing",
  "prometheus",
  "rand",
+ "refinery",
  "regex",
  "reqwest",
  "rocket",

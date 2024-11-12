@@ -44,7 +44,7 @@ use chainhook_sdk::chainhooks::types::{
     ChainhookSpecification,
 };
 use chainhook_sdk::observer::{
-    start_event_observer, BitcoinBlockDataCached, DataHandlerEvent, EventObserverConfig,
+    start_event_observer, BitcoinBlockDataCached, EventObserverConfig,
     HandleBlock, ObserverCommand, ObserverEvent, ObserverSidecar,
 };
 use chainhook_sdk::types::{
@@ -184,89 +184,6 @@ impl Service {
         Ok(())
     }
 
-    // TODO: Deprecated? Only used by ordhook-sdk-js.
-    pub async fn start_event_observer(
-        &mut self,
-        observer_sidecar: ObserverSidecar,
-    ) -> Result<
-        (
-            std::sync::mpsc::Sender<ObserverCommand>,
-            crossbeam_channel::Receiver<ObserverEvent>,
-        ),
-        String,
-    > {
-        let mut event_observer_config = self.config.get_event_observer_config();
-        let (chainhook_config, _) = create_and_consolidate_chainhook_config_with_predicates(
-            vec![],
-            0,
-            true,
-            &self.prometheus,
-            &self.config,
-            &self.ctx,
-        )?;
-
-        event_observer_config.chainhook_config = Some(chainhook_config);
-
-        // Create the chainhook runloop tx/rx comms
-        let (observer_command_tx, observer_command_rx) = channel();
-        let (observer_event_tx, observer_event_rx) = crossbeam_channel::unbounded();
-
-        let inner_ctx = if self.config.logs.chainhook_internals {
-            self.ctx.clone()
-        } else {
-            Context::empty()
-        };
-
-        let _ = start_event_observer(
-            event_observer_config.clone(),
-            observer_command_tx.clone(),
-            observer_command_rx,
-            Some(observer_event_tx),
-            Some(observer_sidecar),
-            None,
-            inner_ctx,
-        );
-
-        Ok((observer_command_tx, observer_event_rx))
-    }
-
-    // TODO: Deprecated? Only used by ordhook-sdk-js.
-    pub fn start_main_runloop(
-        &self,
-        _observer_command_tx: &std::sync::mpsc::Sender<ObserverCommand>,
-        observer_event_rx: crossbeam_channel::Receiver<ObserverEvent>,
-        predicate_activity_relayer: Option<
-            crossbeam_channel::Sender<BitcoinChainhookOccurrencePayload>,
-        >,
-    ) -> Result<(), String> {
-        loop {
-            let event = match observer_event_rx.recv() {
-                Ok(cmd) => cmd,
-                Err(e) => {
-                    error!(
-                        self.ctx.expect_logger(),
-                        "Error: broken channel {}",
-                        e.to_string()
-                    );
-                    break;
-                }
-            };
-            match event {
-                ObserverEvent::BitcoinPredicateTriggered(data) => {
-                    if let Some(ref tx) = predicate_activity_relayer {
-                        let _ = tx.send(data);
-                    }
-                }
-                ObserverEvent::Terminate => {
-                    info!(self.ctx.expect_logger(), "Terminating runloop");
-                    break;
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
     /// Starts the predicates HTTP server and the main Bitcoin processing runloop that will wait for ZMQ messages to arrive in
     /// order to index blocks. This function will block the main thread indefinitely.
     pub fn start_main_runloop_with_dynamic_predicates(
@@ -329,38 +246,6 @@ impl Service {
         }
 
         Ok(())
-    }
-
-    // TODO: Deprecated? Only used by ordhook-sdk-js.
-    pub fn set_up_observer_config(
-        &self,
-        predicates: Vec<BitcoinChainhookSpecification>,
-        enable_internal_trigger: bool,
-    ) -> Result<
-        (
-            EventObserverConfig,
-            Option<crossbeam_channel::Receiver<DataHandlerEvent>>,
-        ),
-        String,
-    > {
-        let mut event_observer_config = self.config.get_event_observer_config();
-        let (chainhook_config, _) = create_and_consolidate_chainhook_config_with_predicates(
-            predicates,
-            0,
-            enable_internal_trigger,
-            &self.prometheus,
-            &self.config,
-            &self.ctx,
-        )?;
-        event_observer_config.chainhook_config = Some(chainhook_config);
-        let data_rx = if enable_internal_trigger {
-            let (tx, rx) = crossbeam_channel::bounded(256);
-            event_observer_config.data_handler_tx = Some(tx);
-            Some(rx)
-        } else {
-            None
-        };
-        Ok((event_observer_config, data_rx))
     }
 
     pub fn set_up_observer_sidecar_runloop(&self) -> Result<ObserverSidecar, String> {

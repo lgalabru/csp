@@ -20,6 +20,7 @@ pub const DEFAULT_BRC20_LRU_CACHE_SIZE: usize = 50_000;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub storage: StorageConfig,
+    pub ordinals_db: PostgresConfig,
     pub http_api: PredicatesApi,
     pub resources: ResourcesConfig,
     pub network: IndexerConfig,
@@ -31,6 +32,15 @@ pub struct Config {
 #[derive(Clone, Debug)]
 pub struct MetaProtocolsConfig {
     pub brc20: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PostgresConfig {
+    pub database: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -167,6 +177,13 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
+            ordinals_db: PostgresConfig {
+                database: "ordinals".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                username: "postgres".to_string(),
+                password: Some("postgres".to_string()),
+            },
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
@@ -202,6 +219,13 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
+            ordinals_db: PostgresConfig {
+                database: "ordinals".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                username: "postgres".to_string(),
+                password: Some("postgres".to_string()),
+            },
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
@@ -236,6 +260,13 @@ impl Config {
             storage: StorageConfig {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
+            },
+            ordinals_db: PostgresConfig {
+                database: "ordinals".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                username: "postgres".to_string(),
+                password: Some("postgres".to_string()),
             },
             http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Download(SnapshotConfigDownloadUrls {

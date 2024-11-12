@@ -3,6 +3,8 @@ pub mod pg_numeric_u128;
 pub mod pg_numeric_u64;
 pub mod pg_smallint_u8;
 
+pub use tokio_postgres;
+
 #[cfg(test)]
 pub async fn pg_test_client() -> tokio_postgres::Client {
     let (client, connection) = tokio_postgres::connect(
