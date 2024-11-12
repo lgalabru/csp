@@ -1,8 +1,8 @@
 [workspace]
 members = [
+    "components/chainhook-postgres",
     "components/ordhook-cli",
     "components/ordhook-core",
-    "components/ordhook-sdk-js"
 ]
 default-members = ["components/ordhook-cli"]
 resolver = "2"
