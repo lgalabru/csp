@@ -4,6 +4,7 @@ CREATE TABLE inscriptions (
     number BIGINT NOT NULL UNIQUE,
     classic_number BIGINT NOT NULL,
     block_height BIGINT NOT NULL,
+    block_hash TEXT NOT NULL,
     tx_index BIGINT NOT NULL,
     address TEXT NOT NULL,
     mime_type TEXT NOT NULL,
