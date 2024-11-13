@@ -1,8 +1,8 @@
 CREATE TABLE tokens (
     ticker TEXT NOT NULL PRIMARY KEY,
     inscription_genesis_id TEXT NOT NULL,
-    inscription_number BIGINT NOT NULL,
-    block_height BIGINT NOT NULL,
+    inscription_number NUMERIC NOT NULL,
+    block_height NUMERIC NOT NULL,
     block_hash TEXT NOT NULL,
     tx_id TEXT NOT NULL,
     tx_index BIGINT NOT NULL,

@@ -1,9 +1,9 @@
 CREATE TABLE inscriptions (
     genesis_id TEXT NOT NULL PRIMARY KEY,
     ordinal_number NUMERIC NOT NULL,
-    number BIGINT NOT NULL UNIQUE,
-    classic_number BIGINT NOT NULL,
-    block_height BIGINT NOT NULL,
+    number NUMERIC NOT NULL UNIQUE,
+    classic_number NUMERIC NOT NULL,
+    block_height NUMERIC NOT NULL,
     block_hash TEXT NOT NULL,
     tx_index BIGINT NOT NULL,
     address TEXT NOT NULL,

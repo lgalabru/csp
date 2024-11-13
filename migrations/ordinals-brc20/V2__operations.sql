@@ -4,7 +4,7 @@ CREATE TABLE operations (
     operation operation NOT NULL,
     inscription_genesis_id TEXT NOT NULL,
     inscription_ordinal_number NUMERIC NOT NULL,
-    block_height BIGINT NOT NULL,
+    block_height NUMERIC NOT NULL,
     block_hash TEXT NOT NULL,
     tx_id TEXT NOT NULL,
     tx_index BIGINT NOT NULL,

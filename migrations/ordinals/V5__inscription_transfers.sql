@@ -2,7 +2,7 @@ CREATE TABLE inscription_transfers (
     genesis_id TEXT NOT NULL,
     number BIGINT NOT NULL,
     ordinal_number NUMERIC NOT NULL,
-    block_height BIGINT NOT NULL,
+    block_height NUMERIC NOT NULL,
     tx_index BIGINT NOT NULL,
     block_hash TEXT NOT NULL,
     block_transfer_index INT NOT NULL

@@ -1,7 +1,7 @@
 CREATE TYPE transfer_type AS ENUM ('transferred', 'spent_in_fees', 'burnt');
 CREATE TABLE locations (
     ordinal_number NUMERIC NOT NULL,
-    block_height BIGINT NOT NULL,
+    block_height NUMERIC NOT NULL,
     tx_index BIGINT NOT NULL,
     tx_id TEXT NOT NULL,
     block_hash TEXT NOT NULL,

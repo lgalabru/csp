@@ -1,6 +1,6 @@
 CREATE TABLE current_locations (
     ordinal_number NUMERIC NOT NULL UNIQUE,
-    block_height BIGINT NOT NULL,
+    block_height NUMERIC NOT NULL,
     tx_index BIGINT NOT NULL,
     address TEXT NOT NULL,
     output TEXT NOT NULL
