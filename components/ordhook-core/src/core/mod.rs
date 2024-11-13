@@ -4,6 +4,7 @@ pub mod protocol;
 #[cfg(test)]
 pub mod test_builders;
 
+use chainhook_postgres::pg_connect;
 use dashmap::DashMap;
 use fxhash::{FxBuildHasher, FxHasher};
 use std::hash::BuildHasherDefault;
@@ -19,8 +20,8 @@ use crate::{
             open_blocks_db_with_retry,
         },
         cursor::TransactionBytesCursor,
-        initialize_sqlite_dbs,
         ordinals::{find_latest_inscription_block_height, open_ordinals_db},
+        ordinals_pg::get_chain_tip_block_height,
     },
     utils::bitcoind::bitcoind_get_block_height,
 };
@@ -134,20 +135,15 @@ pub fn should_sync_rocks_db(config: &Config, ctx: &Context) -> Result<Option<(u6
     Ok(res)
 }
 
-pub fn should_sync_ordhook_db(
+pub async fn should_sync_ordinals_db(
     config: &Config,
     ctx: &Context,
 ) -> Result<Option<(u64, u64, usize)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let mut start_block = find_last_block_inserted(&blocks_db) as u64;
 
-    if start_block == 0 {
-        let _ = initialize_sqlite_dbs(config, ctx);
-    }
-
-    let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), &ctx)?;
-
-    match find_latest_inscription_block_height(&inscriptions_db_conn, ctx)? {
+    let pg_client = pg_connect(&config.ordinals_db.to_conn_config(), ctx).await?;
+    match get_chain_tip_block_height(&pg_client).await? {
         Some(height) => {
             if find_pinned_block_bytes_at_block_height(height as u32, 3, &blocks_db, &ctx).is_none()
             {

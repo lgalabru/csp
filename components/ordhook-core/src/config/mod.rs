@@ -1,3 +1,4 @@
+use chainhook_postgres::PgConnectionConfig;
 use chainhook_sdk::observer::EventObserverConfig;
 use chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
@@ -42,6 +43,18 @@ pub struct PostgresConfig {
     pub port: u16,
     pub username: String,
     pub password: Option<String>,
+}
+
+impl PostgresConfig {
+    pub fn to_conn_config(&self) -> PgConnectionConfig {
+        PgConnectionConfig {
+            dbname: self.database.clone(),
+            host: self.host.clone(),
+            port: self.port,
+            user: self.username.clone(),
+            password: self.password.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

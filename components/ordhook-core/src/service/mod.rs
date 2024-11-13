@@ -20,17 +20,15 @@ use crate::core::protocol::inscription_parsing::{
 };
 use crate::core::protocol::inscription_sequencing::SequenceCursor;
 use crate::core::{
-    first_inscription_height, new_traversals_lazy_cache, should_sync_ordhook_db,
+    first_inscription_height, new_traversals_lazy_cache, should_sync_ordinals_db,
     should_sync_rocks_db,
 };
 use crate::db::blocks::{
     find_missing_blocks, insert_entry_in_blocks, open_blocks_db_with_retry, run_compaction,
 };
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
-use crate::db::ordinals::{
-    find_latest_inscription_block_height, get_latest_indexed_inscription_number, open_ordinals_db,
-    update_ordinals_db_with_block, update_sequence_metadata_with_block,
-};
+use crate::db::ordinals::{update_ordinals_db_with_block, update_sequence_metadata_with_block};
+use crate::db::ordinals_pg::{get_chain_tip_block_height, get_highest_inscription_number};
 use crate::db::{drop_block_data_from_all_dbs, open_all_dbs_rw};
 use crate::scan::bitcoin::process_block_with_predicates;
 use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
@@ -38,14 +36,15 @@ use crate::service::runloops::start_bitcoin_scan_runloop;
 use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_debug, try_error, try_info};
+use chainhook_postgres::{with_pg_connection, with_pg_transaction};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
 use chainhook_sdk::chainhooks::types::{
     BitcoinChainhookSpecification, ChainhookConfig, ChainhookFullSpecification,
     ChainhookSpecification,
 };
 use chainhook_sdk::observer::{
-    start_event_observer, BitcoinBlockDataCached, EventObserverConfig,
-    HandleBlock, ObserverCommand, ObserverEvent, ObserverSidecar,
+    start_event_observer, BitcoinBlockDataCached, EventObserverConfig, HandleBlock,
+    ObserverCommand, ObserverEvent, ObserverSidecar,
 };
 use chainhook_sdk::types::{
     BitcoinBlockData, BlockIdentifier, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData,
@@ -100,13 +99,18 @@ impl Service {
                 ));
             });
         }
-        let ordhook_db = open_ordinals_db(&self.config.expected_cache_path(), &self.ctx)
-            .expect("unable to retrieve ordhook db");
-        self.prometheus.initialize(
-            0,
-            get_latest_indexed_inscription_number(&ordhook_db, &self.ctx).unwrap_or(0),
-            find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap_or(0),
-        );
+        let (max_inscription_number, chain_tip) = with_pg_transaction(
+            &self.config.ordinals_db.to_conn_config(),
+            &self.ctx,
+            |pg_tx| async move {
+                let inscription_number = get_highest_inscription_number(pg_tx).await?.unwrap_or(0);
+                let chain_tip = get_chain_tip_block_height(pg_tx).await?.unwrap_or(0);
+                Ok((inscription_number, chain_tip))
+            },
+        )
+        .await?;
+        self.prometheus
+            .initialize(0, max_inscription_number, chain_tip);
 
         // Catch-up with chain tip.
         let mut event_observer_config = self.config.get_event_observer_config();
@@ -146,10 +150,19 @@ impl Service {
         // Observers handling
         // 1) update event_observer_config with observers ready to be used
         // 2) catch-up outdated observers by dispatching replays
+        let chain_tip =
+            with_pg_connection(
+                &self.config.ordinals_db.to_conn_config(),
+                &self.ctx,
+                |mut client| async move {
+                    Ok(get_chain_tip_block_height(&mut client).await?.unwrap_or(0))
+                },
+            )
+            .await?;
         let (chainhook_config, outdated_observers) =
             create_and_consolidate_chainhook_config_with_predicates(
                 observer_specs,
-                find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap(),
+                chain_tip,
                 predicate_activity_relayer.is_some(),
                 &self.prometheus,
                 &self.config,
@@ -294,14 +307,14 @@ impl Service {
         let (tip, missing_blocks) = {
             let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
 
-            let ordhook_db = open_ordinals_db(&self.config.expected_cache_path(), &self.ctx)
-                .expect("unable to retrieve ordhook db");
-            let tip = find_latest_inscription_block_height(&ordhook_db, &self.ctx)?.unwrap() as u32;
-            info!(
-                self.ctx.expect_logger(),
-                "Checking database integrity up to block #{tip}",
-            );
-            let missing_blocks = find_missing_blocks(&blocks_db, 0, tip, &self.ctx);
+            let tip = with_pg_connection(
+                &self.config.ordinals_db.to_conn_config(),
+                &self.ctx,
+                |client| async move { Ok(get_chain_tip_block_height(&client).await?) },
+            )
+            .await?
+            .unwrap_or(0);
+            let missing_blocks = find_missing_blocks(&blocks_db, 0, tip as u32, &self.ctx);
             (tip, missing_blocks)
         };
         if !missing_blocks.is_empty() {
@@ -324,7 +337,7 @@ impl Service {
         }
         let blocks_db_rw = open_blocks_db_with_retry(false, &self.config, &self.ctx);
         info!(self.ctx.expect_logger(), "Running database compaction",);
-        run_compaction(&blocks_db_rw, tip);
+        run_compaction(&blocks_db_rw, tip as u32);
         Ok(())
     }
 
@@ -366,7 +379,7 @@ impl Service {
         // enabled.
         let mut last_block_processed = 0;
         while let Some((start_block, end_block, speed)) =
-            should_sync_ordhook_db(&self.config, &self.ctx)?
+            should_sync_ordinals_db(&self.config, &self.ctx).await?
         {
             if last_block_processed == end_block {
                 break;

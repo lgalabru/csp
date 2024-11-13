@@ -30,9 +30,11 @@ use ordhook::db::blocks::{
 use ordhook::db::cursor::BlockBytesCursor;
 use ordhook::db::ordinals::{
     find_all_inscriptions_in_block, find_all_transfers_in_block, find_inscription_with_id,
-    find_latest_inscription_block_height, get_default_ordinals_db_file_path, open_ordinals_db,
+    get_default_ordinals_db_file_path, open_ordinals_db,
 };
-use ordhook::db::{drop_block_data_from_all_dbs, initialize_sqlite_dbs, migrate_dbs, open_all_dbs_rw};
+use ordhook::db::{
+    drop_block_data_from_all_dbs, initialize_sqlite_dbs, migrate_dbs, open_all_dbs_rw, ordinals_pg,
+};
 use ordhook::download::download_archive_datasets_if_required;
 use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;
 use ordhook::service::observers::initialize_observers_db;
@@ -744,28 +746,25 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
 
                 migrate_dbs(&config, ctx).await?;
 
-                let db_connections = initialize_sqlite_dbs(&config, ctx);
-
-                let last_known_block =
-                    find_latest_inscription_block_height(&db_connections.ordinals, ctx)?;
-                if last_known_block.is_none() {
+                // Figure out index start block height.
+                let chain_tip = {
+                    let mut pg_client = ordhook::db::pg_connect(&config.ordinals_db, ctx).await;
+                    ordinals_pg::get_chain_tip_block_height(&mut pg_client).await?
+                };
+                if chain_tip.is_none() {
                     open_blocks_db_with_retry(true, &config, ctx);
                 }
-
                 let start_block = match cmd.start_at_block {
                     Some(entry) => entry,
-                    None => match last_known_block {
+                    None => match chain_tip {
                         Some(entry) => entry,
-                        None => {
-                            let first_height = first_inscription_height(&config);
-                            warn!(
-                                ctx.expect_logger(),
-                                "Inscription ingestion will start at block #{}", first_height
-                            );
-                            first_height
-                        }
+                        None => first_inscription_height(&config),
                     },
                 };
+                try_info!(
+                    ctx,
+                    "Inscription ingestion will start at block #{start_block}"
+                );
 
                 let mut predicates = vec![];
                 for post_to in cmd.post_to.iter() {
