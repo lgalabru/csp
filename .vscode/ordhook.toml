@@ -1,0 +1,46 @@
+[storage]
+working_dir = "tmp"
+observers_working_dir = "tmp"
+
+[ordinals_db]
+database = "ordinals"
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+
+[brc20_db]
+database = "brc20"
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+
+# The Http Api allows you to register / deregister
+# dynamically predicates.
+# Disable by default.
+#
+# [http_api]
+# http_port = 20456
+
+[network]
+mode = "mainnet"
+bitcoind_rpc_url = "http://localhost:8332"
+bitcoind_rpc_username = "rafaelcr"
+bitcoind_rpc_password = "developer"
+bitcoind_zmq_url = "tcp://0.0.0.0:18543"
+
+[resources]
+ulimit = 2048
+cpu_core_available = 6
+memory_available = 16
+bitcoind_rpc_threads = 2
+bitcoind_rpc_timeout = 15
+expected_observers_count = 1
+
+[logs]
+ordinals_internals = true
+chainhook_internals = true
+
+[meta_protocols]
+brc20 = true

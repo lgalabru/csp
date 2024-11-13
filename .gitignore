@@ -18,7 +18,7 @@ components/chainhook-types-js/dist
 *.tar.gz
 *.zip
 *.rdb
-Ordhook.toml
+/Ordhook.toml
 
 cache/
 ./tests

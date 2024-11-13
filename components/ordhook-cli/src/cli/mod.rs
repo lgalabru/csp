@@ -32,7 +32,7 @@ use ordhook::db::ordinals::{
     find_all_inscriptions_in_block, find_all_transfers_in_block, find_inscription_with_id,
     find_latest_inscription_block_height, get_default_ordinals_db_file_path, open_ordinals_db,
 };
-use ordhook::db::{drop_block_data_from_all_dbs, initialize_sqlite_dbs, open_all_dbs_rw};
+use ordhook::db::{drop_block_data_from_all_dbs, initialize_sqlite_dbs, migrate_dbs, open_all_dbs_rw};
 use ordhook::download::download_archive_datasets_if_required;
 use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;
 use ordhook::service::observers::initialize_observers_db;
@@ -741,6 +741,9 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                     &cmd.config_path,
                     &None,
                 )?;
+
+                migrate_dbs(&config, ctx).await?;
+
                 let db_connections = initialize_sqlite_dbs(&config, ctx);
 
                 let last_known_block =
