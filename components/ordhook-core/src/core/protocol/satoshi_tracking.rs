@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use chainhook_postgres::tokio_postgres::Transaction;
 use chainhook_sdk::{
     bitcoincore_rpc_json::bitcoin::{Address, Network, ScriptBuf},
     types::{
@@ -11,22 +12,19 @@ use chainhook_sdk::{
 
 use crate::{
     core::{compute_next_satpoint_data, SatPosition},
-    db::ordinals::{
-        find_inscribed_ordinals_at_wached_outpoint, insert_ordinal_transfer_in_locations_tx,
-        OrdinalLocation,
-    },
+    db::ordinals::
+        find_inscribed_ordinals_at_wached_outpoint
+    ,
     ord::height::Height,
     try_info,
-    utils::{format_outpoint_to_watch, parse_satpoint_to_watch},
+    utils::format_outpoint_to_watch,
 };
-use rusqlite::Transaction;
 
 use super::inscription_sequencing::get_bitcoin_network;
 
-pub fn augment_block_with_ordinals_transfer_data(
+pub async fn augment_block_with_ordinal_transfers(
     block: &mut BitcoinBlockData,
-    inscriptions_db_tx: &Transaction,
-    update_db_tx: bool,
+    db_tx: &Transaction<'_>,
     ctx: &Context,
 ) -> bool {
     let mut any_event = false;
@@ -36,38 +34,38 @@ pub fn augment_block_with_ordinals_transfer_data(
     let coinbase_tx = &block.transactions[0].clone();
     let mut cumulated_fees = 0;
     for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
-        let transfers = augment_transaction_with_ordinals_transfers_data(
+        let transfers = augment_transaction_with_ordinal_transfers(
             tx,
             tx_index,
             &network,
             &coinbase_tx,
             coinbase_subsidy,
             &mut cumulated_fees,
-            inscriptions_db_tx,
+            db_tx,
             ctx,
-        );
+        ).await;
         any_event |= !transfers.is_empty();
 
-        if update_db_tx {
-            // Store transfers between each iteration
-            for transfer_data in transfers.into_iter() {
-                let (tx, output_index, offset) =
-                    parse_satpoint_to_watch(&transfer_data.satpoint_post_transfer);
-                let outpoint_to_watch = format_outpoint_to_watch(&tx, output_index);
-                let data = OrdinalLocation {
-                    offset,
-                    block_height: block.block_identifier.index,
-                    tx_index: transfer_data.tx_index,
-                };
-                insert_ordinal_transfer_in_locations_tx(
-                    transfer_data.ordinal_number,
-                    &outpoint_to_watch,
-                    data,
-                    inscriptions_db_tx,
-                    &ctx,
-                );
-            }
-        }
+        // if update_db_tx {
+        //     // Store transfers between each iteration
+        //     for transfer_data in transfers.into_iter() {
+        //         let (tx, output_index, offset) =
+        //             parse_satpoint_to_watch(&transfer_data.satpoint_post_transfer);
+        //         let outpoint_to_watch = format_outpoint_to_watch(&tx, output_index);
+        //         let data = OrdinalLocation {
+        //             offset,
+        //             block_height: block.block_identifier.index,
+        //             tx_index: transfer_data.tx_index,
+        //         };
+        //         insert_ordinal_transfer_in_locations_tx(
+        //             transfer_data.ordinal_number,
+        //             &outpoint_to_watch,
+        //             data,
+        //             inscriptions_db_tx,
+        //             &ctx,
+        //         );
+        //     }
+        // }
     }
 
     any_event
@@ -179,14 +177,14 @@ pub fn compute_satpoint_post_transfer(
     )
 }
 
-pub fn augment_transaction_with_ordinals_transfers_data(
+pub async fn augment_transaction_with_ordinal_transfers(
     tx: &mut BitcoinTransactionData,
     tx_index: usize,
     network: &Network,
     coinbase_tx: &BitcoinTransactionData,
     coinbase_subsidy: u64,
     cumulated_fees: &mut u64,
-    inscriptions_db_tx: &Transaction,
+    db_tx: &Transaction<'_>,
     ctx: &Context,
 ) -> Vec<OrdinalInscriptionTransferData> {
     let mut transfers = vec![];
@@ -208,7 +206,7 @@ pub fn augment_transaction_with_ordinals_transfers_data(
 
         let entries = find_inscribed_ordinals_at_wached_outpoint(
             &outpoint_pre_transfer,
-            &inscriptions_db_tx,
+            &db_tx,
             ctx,
         );
         // For each satpoint inscribed retrieved, we need to compute the next

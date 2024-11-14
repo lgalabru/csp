@@ -1,5 +1,5 @@
 CREATE TABLE inscriptions (
-    genesis_id TEXT NOT NULL PRIMARY KEY,
+    inscription_id TEXT NOT NULL PRIMARY KEY,
     ordinal_number NUMERIC NOT NULL,
     number NUMERIC NOT NULL UNIQUE,
     classic_number NUMERIC NOT NULL,

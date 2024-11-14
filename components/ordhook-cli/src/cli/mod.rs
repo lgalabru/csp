@@ -217,9 +217,6 @@ enum RepairCommand {
     /// Rewrite inscriptions data in hord.sqlite
     #[clap(name = "inscriptions", bin_name = "inscriptions")]
     Inscriptions(RepairStorageCommand),
-    /// Rewrite transfers data in hord.sqlite
-    #[clap(name = "transfers", bin_name = "transfers")]
-    Transfers(RepairStorageCommand),
 }
 
 #[derive(Parser, PartialEq, Clone, Debug)]
@@ -881,29 +878,6 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                     ctx,
                 )
                 .await?;
-            }
-            RepairCommand::Transfers(cmd) => {
-                let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-                let block_post_processor = match cmd.repair_observers {
-                    Some(true) => {
-                        let tx_replayer =
-                            start_observer_forwarding(&config.get_event_observer_config(), ctx);
-                        Some(tx_replayer)
-                    }
-                    _ => None,
-                };
-                let service = Service::new(config, ctx.clone());
-                let blocks = cmd.get_blocks();
-                info!(
-                    ctx.expect_logger(),
-                    "Re-indexing transfers for {} blocks",
-                    blocks.len()
-                );
-                for block in blocks.into_iter() {
-                    service
-                        .replay_transfers(vec![block], block_post_processor.clone())
-                        .await?;
-                }
             }
         },
         Command::Db(OrdhookDbCommand::Check(cmd)) => {

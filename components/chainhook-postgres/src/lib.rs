@@ -1,7 +1,4 @@
-pub mod pg_bigint_u32;
-pub mod pg_numeric_u128;
-pub mod pg_numeric_u64;
-pub mod pg_smallint_u8;
+pub mod types;
 
 use std::future::Future;
 
@@ -45,6 +42,7 @@ where
     F: FnOnce(&'a Transaction<'a>) -> Fut,
     Fut: Future<Output = Result<T, String>> + 'a,
 {
+    // TODO(rafaelcr): Find a way to reuse this connection across transactions
     let mut client = pg_connect(config, ctx).await?;
     let transaction = client
         .transaction()

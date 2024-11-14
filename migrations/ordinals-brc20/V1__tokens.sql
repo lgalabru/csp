@@ -1,6 +1,6 @@
 CREATE TABLE tokens (
     ticker TEXT NOT NULL PRIMARY KEY,
-    inscription_genesis_id TEXT NOT NULL,
+    inscription_id TEXT NOT NULL,
     inscription_number NUMERIC NOT NULL,
     block_height NUMERIC NOT NULL,
     block_hash TEXT NOT NULL,
@@ -16,5 +16,5 @@ CREATE TABLE tokens (
     tx_count BIGINT DEFAULT 0,
     timestamp TIMESTAMPTZ NOT NULL
 );
-CREATE INDEX tokens_inscription_genesis_id_index ON tokens (inscription_genesis_id);
+CREATE INDEX tokens_inscription_id_index ON tokens (inscription_id);
 CREATE INDEX tokens_block_height_tx_index_index ON tokens (block_height DESC, tx_index DESC);

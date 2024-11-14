@@ -5,16 +5,15 @@ use std::{
     time::Duration,
 };
 
+use chainhook_postgres::with_pg_transaction;
 use chainhook_sdk::{
     types::{BitcoinBlockData, TransactionIdentifier},
     utils::Context,
 };
 use crossbeam_channel::{Sender, TryRecvError};
-use rusqlite::Transaction;
 
 use dashmap::DashMap;
 use fxhash::FxHasher;
-use rusqlite::Connection;
 use std::hash::BuildHasherDefault;
 
 use crate::{
@@ -30,24 +29,16 @@ use crate::{
                 parse_inscriptions_in_standardized_block,
             },
             inscription_sequencing::{
-                augment_block_with_ordinals_inscriptions_data_and_write_to_db_tx,
-                get_bitcoin_network, get_jubilee_block_height,
+                augment_block_with_inscriptions, get_bitcoin_network, get_jubilee_block_height,
                 parallelize_inscription_data_computations, SequenceCursor,
             },
             satoshi_numbering::TraversalResult,
-            satoshi_tracking::augment_block_with_ordinals_transfer_data,
+            satoshi_tracking::augment_block_with_ordinal_transfers,
         },
     },
-    db::{
-        blocks::open_blocks_db_with_retry,
-        cursor::TransactionBytesCursor,
-        ordinals::{
-            get_any_entry_in_ordinal_activities, get_latest_indexed_inscription_number,
-            open_ordinals_db, open_ordinals_db_rw,
-        },
-    },
+    db::{blocks::open_blocks_db_with_retry, cursor::TransactionBytesCursor, ordinals_pg},
     service::write_brc20_block_operations,
-    try_error, try_info,
+    try_info,
     utils::monitoring::PrometheusMonitoring,
 };
 
@@ -81,10 +72,7 @@ pub fn start_inscription_indexing_processor(
                 open_ordinals_db_rw(&config.expected_cache_path(), &ctx).unwrap();
             let mut empty_cycles = 0;
 
-            let inscriptions_db_conn =
-                open_ordinals_db(&config.expected_cache_path(), &ctx).unwrap();
-            let mut sequence_cursor = SequenceCursor::new(&inscriptions_db_conn);
-
+            let mut sequence_cursor = SequenceCursor::new();
             let mut brc20_cache = brc20_new_cache(&config);
             let mut brc20_db_conn_rw = brc20_new_rw_db_conn(&config, &ctx);
 
@@ -135,14 +123,13 @@ pub fn start_inscription_indexing_processor(
                     &mut blocks,
                     &mut sequence_cursor,
                     &cache_l2,
-                    &mut inscriptions_db_conn_rw,
                     &mut brc20_cache,
-                    &mut brc20_db_conn_rw,
                     &post_processor,
                     &prometheus,
                     &config,
                     &ctx,
-                );
+                )
+                .await;
 
                 garbage_collect_nth_block += blocks.len();
                 if garbage_collect_nth_block > garbage_collect_every_n_blocks {
@@ -151,11 +138,6 @@ pub fn start_inscription_indexing_processor(
                     // Clear L2 cache on a regular basis
                     try_info!(ctx, "Clearing cache L2 ({} entries)", cache_l2.len());
                     cache_l2.clear();
-
-                    // Recreate sqlite db connection on a regular basis
-                    inscriptions_db_conn_rw =
-                        open_ordinals_db_rw(&config.expected_cache_path(), &ctx).unwrap();
-                    inscriptions_db_conn_rw.flush_prepared_statement_cache();
                     garbage_collect_nth_block = 0;
                 }
             }
@@ -169,34 +151,21 @@ pub fn start_inscription_indexing_processor(
     }
 }
 
-pub fn process_blocks(
+pub async fn process_blocks(
     next_blocks: &mut Vec<BitcoinBlockData>,
     sequence_cursor: &mut SequenceCursor,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
-    inscriptions_db_conn_rw: &mut Connection,
     brc20_cache: &mut Option<Brc20MemoryCache>,
-    brc20_db_conn_rw: &mut Option<Connection>,
     post_processor: &Option<Sender<BitcoinBlockData>>,
     prometheus: &PrometheusMonitoring,
     config: &Config,
     ctx: &Context,
-) -> Vec<BitcoinBlockData> {
+) -> Result<Vec<BitcoinBlockData>, String> {
     let mut cache_l1 = BTreeMap::new();
     let mut updated_blocks = vec![];
 
     for _cursor in 0..next_blocks.len() {
-        let inscriptions_db_tx = inscriptions_db_conn_rw.transaction().unwrap();
-        let brc20_db_tx = brc20_db_conn_rw.as_mut().map(|c| c.transaction().unwrap());
-
         let mut block = next_blocks.remove(0);
-
-        // We check before hand if some data were pre-existing, before processing
-        // Always discard if we have some existing content at this block height (inscription or transfers)
-        let any_existing_activity = get_any_entry_in_ordinal_activities(
-            &block.block_identifier.index,
-            &inscriptions_db_tx,
-            ctx,
-        );
 
         // Invalidate and recompute cursor when crossing the jubilee height
         let jubilee_height =
@@ -205,19 +174,18 @@ pub fn process_blocks(
             sequence_cursor.reset();
         }
 
-        let _ = process_block(
+        process_block(
             &mut block,
             &next_blocks,
             sequence_cursor,
             &mut cache_l1,
             cache_l2,
-            &inscriptions_db_tx,
-            brc20_db_tx.as_ref(),
             brc20_cache.as_mut(),
             prometheus,
             config,
             ctx,
-        );
+        )
+        .await?;
 
         let inscriptions_revealed = get_inscriptions_revealed_in_block(&block)
             .iter()
@@ -234,110 +202,75 @@ pub fn process_blocks(
             inscriptions_revealed.join(", ")
         );
 
-        if any_existing_activity {
-            try_error!(
-                ctx,
-                "Dropping updates for block #{}, activities present in database",
-                block.block_identifier.index,
-            );
-            let _ = inscriptions_db_tx.rollback();
-            let _ = brc20_db_tx.map(|t| t.rollback());
-        } else {
-            match inscriptions_db_tx.commit() {
-                Ok(_) => {
-                    if let Some(brc20_db_tx) = brc20_db_tx {
-                        match brc20_db_tx.commit() {
-                            Ok(_) => {}
-                            Err(_) => {
-                                // TODO: Synchronize rollbacks and commits between BRC-20 and inscription DBs.
-                                todo!()
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    try_error!(
-                        ctx,
-                        "Unable to update changes in block #{}: {}",
-                        block.block_identifier.index,
-                        e.to_string()
-                    );
-                }
-            }
-        }
-
         if let Some(post_processor_tx) = post_processor {
             let _ = post_processor_tx.send(block.clone());
         }
         updated_blocks.push(block);
     }
-    updated_blocks
+    Ok(updated_blocks)
 }
 
-pub fn process_block(
+pub async fn process_block(
     block: &mut BitcoinBlockData,
     next_blocks: &Vec<BitcoinBlockData>,
     sequence_cursor: &mut SequenceCursor,
     cache_l1: &mut BTreeMap<(TransactionIdentifier, usize, u64), TraversalResult>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
-    inscriptions_db_tx: &Transaction,
-    brc20_db_tx: Option<&Transaction>,
     brc20_cache: Option<&mut Brc20MemoryCache>,
     prometheus: &PrometheusMonitoring,
     config: &Config,
     ctx: &Context,
 ) -> Result<(), String> {
-    // Parsed BRC20 ops will be deposited here for this block.
-    let mut brc20_operation_map = HashMap::new();
-    parse_inscriptions_in_standardized_block(block, &mut brc20_operation_map, config, &ctx);
+    let block_height = block.block_identifier.index;
+    with_pg_transaction(&config.ordinals_db.to_conn_config(), ctx, |tx| async move {
+        // Parsed BRC20 ops will be deposited here for this block.
+        let mut brc20_operation_map = HashMap::new();
+        parse_inscriptions_in_standardized_block(block, &mut brc20_operation_map, config, &ctx);
 
-    let any_processable_transactions = parallelize_inscription_data_computations(
-        &block,
-        &next_blocks,
-        cache_l1,
-        cache_l2,
-        inscriptions_db_tx,
-        config,
-        ctx,
-    )?;
-
-    let inner_ctx = if config.logs.ordinals_internals {
-        ctx.clone()
-    } else {
-        Context::empty()
-    };
-
-    // Inscriptions
-    if any_processable_transactions {
-        let _ = augment_block_with_ordinals_inscriptions_data_and_write_to_db_tx(
-            block,
-            sequence_cursor,
+        let has_inscription_reveals = parallelize_inscription_data_computations(
+            &block,
+            &next_blocks,
             cache_l1,
-            &inscriptions_db_tx,
-            &inner_ctx,
+            cache_l2,
+            tx,
+            config,
+            ctx,
+        )?;
+        let inner_ctx = if config.logs.ordinals_internals {
+            ctx.clone()
+        } else {
+            Context::empty()
+        };
+        if has_inscription_reveals {
+            let _ =
+                augment_block_with_inscriptions(block, sequence_cursor, cache_l1, tx, &inner_ctx)
+                    .await?;
+        }
+        let _ = augment_block_with_ordinal_transfers(block, tx, &inner_ctx);
+
+        // BRC-20
+        if let (Some(brc20_cache), Some(brc20_db)) = (brc20_cache, config.brc20_db.as_ref()) {
+            with_pg_transaction(&brc20_db.to_conn_config(), ctx, |brc20_tx| async move {
+                write_brc20_block_operations(
+                    block,
+                    &mut brc20_operation_map,
+                    brc20_cache,
+                    brc20_tx,
+                    &ctx,
+                )
+                .await
+            });
+        }
+
+        prometheus.metrics_block_indexed(block_height);
+        prometheus.metrics_inscription_indexed(
+            ordinals_pg::get_highest_inscription_number(tx)
+                .await?
+                .unwrap_or(0),
         );
-    }
-    // Transfers
-    let _ = augment_block_with_ordinals_transfer_data(block, inscriptions_db_tx, true, &inner_ctx);
-    // BRC-20
-    match (brc20_db_tx, brc20_cache) {
-        (Some(brc20_db_tx), Some(brc20_cache)) => write_brc20_block_operations(
-            block,
-            &mut brc20_operation_map,
-            brc20_cache,
-            brc20_db_tx,
-            &ctx,
-        ),
-        _ => {}
-    }
-
-    // Monitoring
-    prometheus.metrics_block_indexed(block.block_identifier.index);
-    prometheus.metrics_inscription_indexed(
-        get_latest_indexed_inscription_number(inscriptions_db_tx, &inner_ctx).unwrap_or(0),
-    );
-
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]

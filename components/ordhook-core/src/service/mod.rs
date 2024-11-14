@@ -14,7 +14,6 @@ use crate::core::pipeline::bitcoind_download_blocks;
 use crate::core::pipeline::processors::block_archiving::start_block_archiving_processor;
 use crate::core::pipeline::processors::inscription_indexing::process_block;
 use crate::core::pipeline::processors::start_inscription_indexing_processor;
-use crate::core::pipeline::processors::transfers_recomputing::start_transfers_recomputing_processor;
 use crate::core::protocol::inscription_parsing::{
     get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
 };
@@ -28,14 +27,14 @@ use crate::db::blocks::{
 };
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
 use crate::db::ordinals::{update_ordinals_db_with_block, update_sequence_metadata_with_block};
-use crate::db::ordinals_pg::{get_chain_tip_block_height, get_highest_inscription_number};
-use crate::db::{drop_block_data_from_all_dbs, open_all_dbs_rw};
+use crate::db::{drop_block_data_from_all_dbs, open_all_dbs_rw, ordinals_pg};
 use crate::scan::bitcoin::process_block_with_predicates;
 use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
 use crate::service::runloops::start_bitcoin_scan_runloop;
 use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_debug, try_error, try_info};
+use chainhook_postgres::tokio_postgres::Transaction;
 use chainhook_postgres::{with_pg_connection, with_pg_transaction};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
 use chainhook_sdk::chainhooks::types::{
@@ -56,7 +55,6 @@ use crossbeam_channel::{select, Sender};
 use dashmap::DashMap;
 use fxhash::FxHasher;
 use http_api::start_observers_http_server;
-use rusqlite::Transaction;
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasherDefault;
@@ -103,8 +101,12 @@ impl Service {
             &self.config.ordinals_db.to_conn_config(),
             &self.ctx,
             |pg_tx| async move {
-                let inscription_number = get_highest_inscription_number(pg_tx).await?.unwrap_or(0);
-                let chain_tip = get_chain_tip_block_height(pg_tx).await?.unwrap_or(0);
+                let inscription_number = ordinals_pg::get_highest_inscription_number(pg_tx)
+                    .await?
+                    .unwrap_or(0);
+                let chain_tip = ordinals_pg::get_chain_tip_block_height(pg_tx)
+                    .await?
+                    .unwrap_or(0);
                 Ok((inscription_number, chain_tip))
             },
         )
@@ -150,15 +152,16 @@ impl Service {
         // Observers handling
         // 1) update event_observer_config with observers ready to be used
         // 2) catch-up outdated observers by dispatching replays
-        let chain_tip =
-            with_pg_connection(
-                &self.config.ordinals_db.to_conn_config(),
-                &self.ctx,
-                |mut client| async move {
-                    Ok(get_chain_tip_block_height(&mut client).await?.unwrap_or(0))
-                },
-            )
-            .await?;
+        let chain_tip = with_pg_connection(
+            &self.config.ordinals_db.to_conn_config(),
+            &self.ctx,
+            |mut client| async move {
+                Ok(ordinals_pg::get_chain_tip_block_height(&mut client)
+                    .await?
+                    .unwrap_or(0))
+            },
+        )
+        .await?;
         let (chainhook_config, outdated_observers) =
             create_and_consolidate_chainhook_config_with_predicates(
                 observer_specs,
@@ -310,7 +313,7 @@ impl Service {
             let tip = with_pg_connection(
                 &self.config.ordinals_db.to_conn_config(),
                 &self.ctx,
-                |client| async move { Ok(get_chain_tip_block_height(&client).await?) },
+                |client| async move { Ok(ordinals_pg::get_chain_tip_block_height(&client).await?) },
             )
             .await?
             .unwrap_or(0);
@@ -410,28 +413,6 @@ impl Service {
         }
 
         try_info!(self.ctx, "Service: Index has reached bitcoin chain tip");
-        Ok(())
-    }
-
-    pub async fn replay_transfers(
-        &self,
-        blocks: Vec<u64>,
-        block_post_processor: Option<crossbeam_channel::Sender<BitcoinBlockData>>,
-    ) -> Result<(), String> {
-        // Start predicate processor
-        let blocks_post_processor =
-            start_transfers_recomputing_processor(&self.config, &self.ctx, block_post_processor);
-
-        bitcoind_download_blocks(
-            &self.config,
-            blocks,
-            first_inscription_height(&self.config),
-            &blocks_post_processor,
-            100,
-            &self.ctx,
-        )
-        .await?;
-
         Ok(())
     }
 }
@@ -609,7 +590,7 @@ pub fn chainhook_sidecar_mutate_blocks(
             updated_blocks_ids.push(format!("{}", cache.block.block_identifier.index));
 
             let mut cache_l1 = BTreeMap::new();
-            let mut sequence_cursor = SequenceCursor::new(&inscriptions_db_tx);
+            let mut sequence_cursor = SequenceCursor::new();
 
             let _ = process_block(
                 &mut cache.block,
@@ -617,8 +598,6 @@ pub fn chainhook_sidecar_mutate_blocks(
                 &mut sequence_cursor,
                 &mut cache_l1,
                 &cache_l2,
-                &inscriptions_db_tx,
-                brc20_db_tx.as_ref(),
                 brc20_cache.as_mut(),
                 prometheus,
                 &config,
@@ -652,15 +631,15 @@ pub fn chainhook_sidecar_mutate_blocks(
 
 /// Writes BRC-20 data already included in the augmented `BitcoinBlockData` onto the BRC-20 database. Only called if BRC-20 is
 /// enabled.
-pub fn write_brc20_block_operations(
+pub async fn write_brc20_block_operations(
     block: &mut BitcoinBlockData,
     brc20_operation_map: &mut HashMap<String, ParsedBrc20Operation>,
     brc20_cache: &mut Brc20MemoryCache,
-    db_tx: &Transaction,
+    brc20_db_tx: &Transaction<'_>,
     ctx: &Context,
-) {
+) -> Result<(), String> {
     if block.block_identifier.index < brc20_activation_height(&block.metadata.network) {
-        return;
+        return Ok(());
     }
     for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
         for op in tx.metadata.ordinal_operations.iter() {
@@ -675,7 +654,7 @@ pub fn write_brc20_block_operations(
                             &block.block_identifier,
                             &block.metadata.network,
                             brc20_cache,
-                            &db_tx,
+                            &brc20_db_tx,
                             &ctx,
                         ) {
                             Ok(op) => match op {
@@ -704,7 +683,7 @@ pub fn write_brc20_block_operations(
                                         reveal,
                                         &block.block_identifier,
                                         tx_index as u64,
-                                        db_tx,
+                                        brc20_db_tx,
                                         ctx,
                                     );
                                     try_info!(
@@ -717,7 +696,7 @@ pub fn write_brc20_block_operations(
                                 }
                                 VerifiedBrc20Operation::TokenMint(balance) => {
                                     let Some(token) =
-                                        brc20_cache.get_token(&balance.tick, db_tx, ctx)
+                                        brc20_cache.get_token(&balance.tick, brc20_db_tx, ctx)
                                     else {
                                         unreachable!();
                                     };
@@ -737,7 +716,7 @@ pub fn write_brc20_block_operations(
                                         reveal,
                                         &block.block_identifier,
                                         tx_index as u64,
-                                        db_tx,
+                                        brc20_db_tx,
                                         ctx,
                                     );
                                     try_info!(
@@ -751,7 +730,7 @@ pub fn write_brc20_block_operations(
                                 }
                                 VerifiedBrc20Operation::TokenTransfer(balance) => {
                                     let Some(token) =
-                                        brc20_cache.get_token(&balance.tick, db_tx, ctx)
+                                        brc20_cache.get_token(&balance.tick, brc20_db_tx, ctx)
                                     else {
                                         unreachable!();
                                     };
@@ -771,7 +750,7 @@ pub fn write_brc20_block_operations(
                                         reveal,
                                         &block.block_identifier,
                                         tx_index as u64,
-                                        db_tx,
+                                        brc20_db_tx,
                                         ctx,
                                     );
                                     try_info!(
@@ -796,14 +775,14 @@ pub fn write_brc20_block_operations(
                     }
                 }
                 OrdinalOperation::InscriptionTransferred(transfer) => {
-                    match verify_brc20_transfer(transfer, brc20_cache, &db_tx, &ctx) {
+                    match verify_brc20_transfer(transfer, brc20_cache, &brc20_db_tx, &ctx) {
                         Ok(data) => {
-                            let Some(token) = brc20_cache.get_token(&data.tick, db_tx, ctx) else {
+                            let Some(token) = brc20_cache.get_token(&data.tick, brc20_db_tx, ctx) else {
                                 unreachable!();
                             };
                             let Some(unsent_transfer) = brc20_cache.get_unsent_token_transfer(
                                 transfer.ordinal_number,
-                                db_tx,
+                                brc20_db_tx,
                                 ctx,
                             ) else {
                                 unreachable!();
@@ -825,7 +804,7 @@ pub fn write_brc20_block_operations(
                                 &transfer,
                                 &block.block_identifier,
                                 tx_index as u64,
-                                db_tx,
+                                brc20_db_tx,
                                 ctx,
                             );
                             try_info!(
@@ -846,5 +825,6 @@ pub fn write_brc20_block_operations(
             }
         }
     }
-    brc20_cache.db_cache.flush(db_tx, ctx);
+    brc20_cache.db_cache.flush(brc20_db_tx, ctx);
+    Ok(())
 }
