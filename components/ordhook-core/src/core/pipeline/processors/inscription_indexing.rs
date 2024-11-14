@@ -266,7 +266,7 @@ pub async fn process_block(
         prometheus.metrics_inscription_indexed(
             ordinals_pg::get_highest_inscription_number(tx)
                 .await?
-                .unwrap_or(0),
+                .unwrap_or(0) as u64,
         );
         Ok(())
     })

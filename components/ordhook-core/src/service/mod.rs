@@ -112,7 +112,7 @@ impl Service {
         )
         .await?;
         self.prometheus
-            .initialize(0, max_inscription_number, chain_tip);
+            .initialize(0, max_inscription_number as u64, chain_tip);
 
         // Catch-up with chain tip.
         let mut event_observer_config = self.config.get_event_observer_config();

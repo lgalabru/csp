@@ -12,15 +12,29 @@ use chainhook_sdk::{
 
 use crate::{
     core::{compute_next_satpoint_data, SatPosition},
-    db::ordinals::
-        find_inscribed_ordinals_at_wached_outpoint
-    ,
+    db::ordinals::find_inscribed_ordinals_at_wached_outpoint,
     ord::height::Height,
     try_info,
     utils::format_outpoint_to_watch,
 };
 
 use super::inscription_sequencing::get_bitcoin_network;
+
+pub fn get_output_and_offset_from_satpoint(satpoint: &String) -> Result<(String, u64), String> {
+    let parts: Vec<&str> = satpoint.split(":").collect();
+    let inscription_id = parts
+        .get(0)
+        .ok_or("get_output_and_offset_from_satpoint: inscription_id not found")?;
+    let output = parts
+        .get(1)
+        .ok_or("get_output_and_offset_from_satpoint: output not found")?;
+    let offset: u64 = parts
+        .get(2)
+        .ok_or("get_output_and_offset_from_satpoint: offset not found")?
+        .parse()
+        .map_err(|e| format!("get_output_and_offset_from_satpoint offset parse error: {e}"))?;
+    Ok((format!("{}:{}", inscription_id, output), offset))
+}
 
 pub async fn augment_block_with_ordinal_transfers(
     block: &mut BitcoinBlockData,
@@ -43,7 +57,8 @@ pub async fn augment_block_with_ordinal_transfers(
             &mut cumulated_fees,
             db_tx,
             ctx,
-        ).await;
+        )
+        .await;
         any_event |= !transfers.is_empty();
 
         // if update_db_tx {
@@ -204,11 +219,8 @@ pub async fn augment_transaction_with_ordinal_transfers(
             input.previous_output.vout as usize,
         );
 
-        let entries = find_inscribed_ordinals_at_wached_outpoint(
-            &outpoint_pre_transfer,
-            &db_tx,
-            ctx,
-        );
+        let entries =
+            find_inscribed_ordinals_at_wached_outpoint(&outpoint_pre_transfer, &db_tx, ctx);
         // For each satpoint inscribed retrieved, we need to compute the next
         // outpoint to watch
         for watched_satpoint in entries.into_iter() {

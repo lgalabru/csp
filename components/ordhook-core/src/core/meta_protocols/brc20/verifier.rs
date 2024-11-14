@@ -1,9 +1,9 @@
+use chainhook_postgres::tokio_postgres::Transaction;
 use chainhook_sdk::types::{
     BitcoinNetwork, BlockIdentifier, OrdinalInscriptionRevealData, OrdinalInscriptionTransferData,
     OrdinalInscriptionTransferDestination,
 };
 use chainhook_sdk::utils::Context;
-use rusqlite::Transaction;
 
 use super::brc20_self_mint_activation_height;
 use super::cache::Brc20MemoryCache;
@@ -13,9 +13,9 @@ use super::parser::{amt_has_valid_decimals, ParsedBrc20Operation};
 pub struct VerifiedBrc20TokenDeployData {
     pub tick: String,
     pub display_tick: String,
-    pub max: f64,
-    pub lim: f64,
-    pub dec: u64,
+    pub max: u128,
+    pub lim: u128,
+    pub dec: u8,
     pub address: String,
     pub self_mint: bool,
 }
@@ -23,14 +23,14 @@ pub struct VerifiedBrc20TokenDeployData {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct VerifiedBrc20BalanceData {
     pub tick: String,
-    pub amt: f64,
+    pub amt: u128,
     pub address: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct VerifiedBrc20TransferData {
     pub tick: String,
-    pub amt: f64,
+    pub amt: u128,
     pub sender_address: String,
     pub receiver_address: String,
 }
@@ -43,13 +43,13 @@ pub enum VerifiedBrc20Operation {
     TokenTransferSend(VerifiedBrc20TransferData),
 }
 
-pub fn verify_brc20_operation(
+pub async fn verify_brc20_operation(
     operation: &ParsedBrc20Operation,
     reveal: &OrdinalInscriptionRevealData,
     block_identifier: &BlockIdentifier,
     network: &BitcoinNetwork,
     cache: &mut Brc20MemoryCache,
-    db_tx: &Transaction,
+    db_tx: &Transaction<'_>,
     ctx: &Context,
 ) -> Result<VerifiedBrc20Operation, String> {
     let Some(inscriber_address) = reveal.inscriber_address.clone() else {
@@ -63,7 +63,8 @@ pub fn verify_brc20_operation(
     }
     match operation {
         ParsedBrc20Operation::Deploy(data) => {
-            if cache.get_token(&data.tick, db_tx, ctx).is_some() {
+            // TODO(rafaelcr): These should not return errors but only log
+            if cache.get_token(&data.tick, db_tx).await?.is_some() {
                 return Err(format!("Token {} already exists", &data.tick));
             }
             if data.self_mint && block_identifier.index < brc20_self_mint_activation_height(network)
@@ -86,7 +87,7 @@ pub fn verify_brc20_operation(
             ));
         }
         ParsedBrc20Operation::Mint(data) => {
-            let Some(token) = cache.get_token(&data.tick, db_tx, ctx) else {
+            let Some(token) = cache.get_token(&data.tick, db_tx).await? else {
                 return Err(format!(
                     "Token {} does not exist on mint attempt",
                     &data.tick
@@ -106,7 +107,7 @@ pub fn verify_brc20_operation(
                     ));
                 }
             }
-            if data.float_amt() > token.lim {
+            if data.float_amt() > token.limit {
                 return Err(format!(
                     "Cannot mint more than {} tokens for {}, attempted to mint {}",
                     token.lim, token.tick, data.amt

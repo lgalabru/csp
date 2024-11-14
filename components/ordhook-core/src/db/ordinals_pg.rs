@@ -1,6 +1,6 @@
 use chainhook_postgres::{
     tokio_postgres::{Client, GenericClient},
-    types::{PgNumericI64, PgNumericU64},
+    types::PgNumericU64,
 };
 use refinery::embed_migrations;
 
@@ -32,7 +32,7 @@ pub async fn get_chain_tip_block_height<T: GenericClient>(
 
 pub async fn get_highest_inscription_number<T: GenericClient>(
     client: &T,
-) -> Result<Option<u64>, String> {
+) -> Result<Option<i64>, String> {
     let row = client
         .query_opt("SELECT MAX(number) AS max FROM inscriptions", &[])
         .await
@@ -40,8 +40,8 @@ pub async fn get_highest_inscription_number<T: GenericClient>(
     let Some(row) = row else {
         return Ok(None);
     };
-    let max: Option<PgNumericU64> = row.get("max");
-    Ok(max.map(|v| v.0))
+    let max: Option<i64> = row.get("max");
+    Ok(max)
 }
 
 pub async fn get_highest_blessed_classic_inscription_number<T: GenericClient>(
@@ -57,8 +57,8 @@ pub async fn get_highest_blessed_classic_inscription_number<T: GenericClient>(
     let Some(row) = row else {
         return Ok(None);
     };
-    let max: Option<PgNumericI64> = row.get("max");
-    Ok(max.map(|v| v.0))
+    let max: Option<i64> = row.get("max");
+    Ok(max)
 }
 
 pub async fn get_lowest_cursed_classic_inscription_number<T: GenericClient>(
@@ -74,8 +74,8 @@ pub async fn get_lowest_cursed_classic_inscription_number<T: GenericClient>(
     let Some(row) = row else {
         return Ok(None);
     };
-    let min: Option<PgNumericI64> = row.get("min");
-    Ok(min.map(|v| v.0))
+    let min: Option<i64> = row.get("min");
+    Ok(min)
 }
 
 pub async fn get_blessed_inscription_id_for_ordinal_number<T: GenericClient>(
