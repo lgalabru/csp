@@ -3,21 +3,19 @@ use crate::core::protocol::inscription_parsing::{
     get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
     parse_inscriptions_and_standardize_block,
 };
-use crate::core::protocol::inscription_sequencing::consolidate_block_with_pre_computed_ordinals_data;
-use crate::db::initialize_sqlite_dbs;
-use crate::db::ordinals::get_any_entry_in_ordinal_activities;
+use crate::core::protocol::inscription_sequencing::augment_block_with_pre_computed_ordinals_data;
+use crate::db::ordinals_pg;
 use crate::download::download_archive_datasets_if_required;
 use crate::service::observers::{
     open_readwrite_observers_db_conn_or_panic, update_observer_progress,
 };
 use crate::utils::bitcoind::bitcoind_get_block_height;
+use chainhook_postgres::with_pg_connection;
 use chainhook_sdk::chainhooks::bitcoin::{
     evaluate_bitcoin_chainhooks_on_chain_event, handle_bitcoin_hook_action,
     BitcoinChainhookOccurrence, BitcoinTriggerChainhook,
 };
-use chainhook_sdk::chainhooks::types::{
-    BitcoinChainhookSpecification, BitcoinPredicateType, OrdinalOperations,
-};
+use chainhook_sdk::chainhooks::types::BitcoinChainhookSpecification;
 use chainhook_sdk::indexer::bitcoin::{
     build_http_client, download_and_parse_block_with_retry, retrieve_block_hash_with_retry,
 };
@@ -76,24 +74,23 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
     let http_client = build_http_client();
 
     while let Some(current_block_height) = block_heights_to_scan.pop_front() {
-        // Open DB connections
-        let db_connections = initialize_sqlite_dbs(&config, ctx);
-        let mut inscriptions_db_conn = db_connections.ordinals;
-        let brc20_db_conn = match predicate_spec.predicate {
-            // Even if we have a valid BRC-20 DB connection, check if the predicate we're evaluating requires us to do the work.
-            BitcoinPredicateType::OrdinalsProtocol(OrdinalOperations::InscriptionFeed(
-                ref feed_data,
-            )) if feed_data.meta_protocols.is_some() => db_connections.brc20,
-            _ => None,
-        };
-
         number_of_blocks_scanned += 1;
-
-        if !get_any_entry_in_ordinal_activities(&current_block_height, &inscriptions_db_conn, &ctx)
-        {
+        let has_activity = with_pg_connection(
+            &config.ordinals_db.to_conn_config(),
+            ctx,
+            |client| async move {
+                Ok(
+                    ordinals_pg::has_ordinal_activity_at_block(&client, current_block_height)
+                        .await?,
+                )
+            },
+        )
+        .await?;
+        if !has_activity {
             continue;
         }
 
+        // 1: Get the full raw block from bitcoind and standardize it.
         let block_hash = retrieve_block_hash_with_retry(
             &http_client,
             &current_block_height,
@@ -119,24 +116,13 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
             }
         };
 
-        {
-            let inscriptions_db_tx = inscriptions_db_conn.transaction().unwrap();
-            consolidate_block_with_pre_computed_ordinals_data(
-                &mut block,
-                &inscriptions_db_tx,
-                true,
-                brc20_db_conn.as_ref(),
-                &ctx,
-            );
-        }
-
+        // 2: Augment the block with ordinal data we've already indexed in the past.
+        augment_block_with_pre_computed_ordinals_data(&mut block, &config, &ctx).await?;
         let inscriptions_revealed = get_inscriptions_revealed_in_block(&block)
             .iter()
             .map(|d| d.get_inscription_number().to_string())
             .collect::<Vec<String>>();
-
         let inscriptions_transferred = get_inscriptions_transferred_in_block(&block).len();
-
         info!(
             ctx.expect_logger(),
             "Processing block #{current_block_height} through {} predicate revealed {} new inscriptions [{}] and {inscriptions_transferred} transfers",
@@ -145,6 +131,7 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
             inscriptions_revealed.join(", ")
         );
 
+        // 3: Evaluate the predicate and send payloads to clients.
         match process_block_with_predicates(
             block,
             &vec![&predicate_spec],

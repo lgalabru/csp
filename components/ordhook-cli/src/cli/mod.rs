@@ -19,7 +19,6 @@ use ordhook::config::Config;
 use ordhook::core::meta_protocols::brc20::db::get_brc20_operations_on_block;
 use ordhook::core::pipeline::bitcoind_download_blocks;
 use ordhook::core::pipeline::processors::block_archiving::start_block_archiving_processor;
-use ordhook::core::pipeline::processors::start_inscription_indexing_processor;
 use ordhook::core::protocol::inscription_parsing::parse_inscriptions_and_standardize_block;
 use ordhook::core::protocol::satoshi_numbering::compute_satoshi_number;
 use ordhook::core::{first_inscription_height, new_traversals_lazy_cache};
@@ -214,9 +213,6 @@ enum RepairCommand {
     /// Rewrite blocks data in hord.rocksdb
     #[clap(name = "blocks", bin_name = "blocks")]
     Blocks(RepairStorageCommand),
-    /// Rewrite inscriptions data in hord.sqlite
-    #[clap(name = "inscriptions", bin_name = "inscriptions")]
-    Inscriptions(RepairStorageCommand),
 }
 
 #[derive(Parser, PartialEq, Clone, Debug)]
@@ -847,37 +843,6 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                         }
                     }
                 }
-            }
-            RepairCommand::Inscriptions(cmd) => {
-                let mut config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-                if let Some(network_threads) = cmd.network_threads {
-                    config.resources.bitcoind_rpc_threads = network_threads;
-                }
-                let block_post_processor = match cmd.repair_observers {
-                    Some(true) => {
-                        let tx_replayer =
-                            start_observer_forwarding(&config.get_event_observer_config(), ctx);
-                        Some(tx_replayer)
-                    }
-                    _ => None,
-                };
-                let blocks = cmd.get_blocks();
-                let inscription_indexing_processor = start_inscription_indexing_processor(
-                    &config,
-                    ctx,
-                    block_post_processor,
-                    &PrometheusMonitoring::new(),
-                );
-
-                bitcoind_download_blocks(
-                    &config,
-                    blocks,
-                    first_inscription_height(&config),
-                    &inscription_indexing_processor,
-                    10_000,
-                    ctx,
-                )
-                .await?;
             }
         },
         Command::Db(OrdhookDbCommand::Check(cmd)) => {

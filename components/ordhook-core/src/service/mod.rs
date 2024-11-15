@@ -12,8 +12,7 @@ use crate::core::meta_protocols::brc20::verifier::{
 use crate::core::meta_protocols::brc20::{self, brc20_activation_height};
 use crate::core::pipeline::bitcoind_download_blocks;
 use crate::core::pipeline::processors::block_archiving::start_block_archiving_processor;
-use crate::core::pipeline::processors::inscription_indexing::process_block;
-use crate::core::pipeline::processors::start_inscription_indexing_processor;
+use crate::core::pipeline::processors::inscription_indexing::{process_block, start_inscription_indexing_processor};
 use crate::core::protocol::inscription_parsing::{
     get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
 };
@@ -33,7 +32,7 @@ use crate::service::observers::create_and_consolidate_chainhook_config_with_pred
 use crate::service::runloops::start_bitcoin_scan_runloop;
 use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
-use crate::{try_debug, try_error, try_info};
+use crate::{try_error, try_info};
 use chainhook_postgres::tokio_postgres::Transaction;
 use chainhook_postgres::{with_pg_connection, with_pg_transaction};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
@@ -663,10 +662,10 @@ pub async fn write_brc20_block_operations(
                                 tx.metadata.brc20_operation =
                                     Some(Brc20Operation::Deploy(Brc20TokenDeployData {
                                         tick: token.tick.clone(),
-                                        max: brc20::format_amount_with_decimals(
+                                        max: brc20::u128_amount_to_decimals_str(
                                             token.max, token.dec,
                                         ),
-                                        lim: brc20::format_amount_with_decimals(
+                                        lim: brc20::u128_amount_to_decimals_str(
                                             token.lim, token.dec,
                                         ),
                                         dec: token.dec.to_string(),
@@ -699,7 +698,7 @@ pub async fn write_brc20_block_operations(
                                 tx.metadata.brc20_operation =
                                     Some(Brc20Operation::Mint(Brc20BalanceData {
                                         tick: balance.tick.clone(),
-                                        amt: brc20::format_amount_with_decimals(
+                                        amt: brc20::u128_amount_to_decimals_str(
                                             balance.amt,
                                             token.decimals.0,
                                         ),
@@ -735,7 +734,7 @@ pub async fn write_brc20_block_operations(
                                 tx.metadata.brc20_operation =
                                     Some(Brc20Operation::Transfer(Brc20BalanceData {
                                         tick: balance.tick.clone(),
-                                        amt: brc20::format_amount_with_decimals(
+                                        amt: brc20::u128_amount_to_decimals_str(
                                             balance.amt,
                                             token.decimals.0,
                                         ),
@@ -790,7 +789,7 @@ pub async fn write_brc20_block_operations(
                             tx.metadata.brc20_operation =
                                 Some(Brc20Operation::TransferSend(Brc20TransferData {
                                     tick: data.tick.clone(),
-                                    amt: brc20::format_amount_with_decimals(
+                                    amt: brc20::u128_amount_to_decimals_str(
                                         data.amt,
                                         token.decimals.0,
                                     ),

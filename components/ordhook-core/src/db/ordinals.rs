@@ -484,21 +484,6 @@ where
     results
 }
 
-pub fn get_any_entry_in_ordinal_activities(
-    block_height: &u64,
-    db_conn: &Connection,
-    ctx: &Context,
-) -> bool {
-    let args: &[&dyn ToSql] = &[&block_height.to_sql().unwrap()];
-    let query = "SELECT DISTINCT block_height FROM inscriptions WHERE block_height = ?";
-    if perform_query_exists(query, args, db_conn, ctx) {
-        return true;
-    }
-
-    let query = "SELECT DISTINCT block_height FROM locations WHERE block_height = ?";
-    perform_query_exists(query, args, db_conn, ctx)
-}
-
 pub fn find_latest_inscription_block_height(
     db_conn: &Connection,
     ctx: &Context,

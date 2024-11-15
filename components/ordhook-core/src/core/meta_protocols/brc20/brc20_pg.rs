@@ -1,10 +1,18 @@
+use std::collections::HashMap;
+
 use chainhook_postgres::{
     tokio_postgres::{types::ToSql, Client, GenericClient},
     types::{PgNumericU128, PgNumericU64},
 };
+use chainhook_sdk::types::{
+    BitcoinBlockData, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData, Brc20TransferData,
+};
 use refinery::embed_migrations;
 
-use super::models::{DbOperation, DbToken};
+use super::{
+    models::{DbOperation, DbToken},
+    u128_amount_to_decimals_str,
+};
 
 embed_migrations!("../../migrations/ordinals-brc20");
 pub async fn migrate(pg_client: &mut Client) -> Result<(), String> {
@@ -178,6 +186,91 @@ pub async fn insert_operations<T: GenericClient>(
             )
             .await
             .map_err(|e| format!("insert_operations: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn get_operations_at_block<T: GenericClient>(
+    block_height: u64,
+    client: &T,
+) -> Result<HashMap<u64, DbOperation>, String> {
+    let rows = client
+        .query(
+            "SELECT * FROM operations WHERE block_height = $1 AND operation <> 'transfer_receive'",
+            &[&PgNumericU64(block_height)],
+        )
+        .await
+        .map_err(|e| format!("get_inscriptions_at_block: {e}"))?;
+    let mut map = HashMap::new();
+    for row in rows.iter() {
+        let tx_index: PgNumericU64 = row.get("tx_index");
+        map.insert(tx_index.0, DbOperation::from_pg_row(row));
+    }
+    Ok(map)
+}
+
+/// Adds previously-indexed BRC-20 operation metadata to a `BitcoinBlockData` block.
+pub async fn augment_block_with_operations<T: GenericClient>(
+    block: &mut BitcoinBlockData,
+    client: &T,
+) -> Result<(), String> {
+    let mut token_map = HashMap::new();
+    let mut operation_map = get_operations_at_block(block.block_identifier.index, client).await?;
+    for tx in block.transactions.iter_mut() {
+        let Some(entry) = operation_map.remove(&(tx.metadata.index as u64)) else {
+            continue;
+        };
+        if token_map.get(&entry.ticker).is_none() {
+            let Some(row) = get_token(&entry.ticker, client).await? else {
+                unreachable!("BRC-20 token not found when processing operation");
+            };
+            token_map.insert(entry.ticker.clone(), row);
+        }
+        let token = token_map
+            .get(&entry.ticker)
+            .expect("Token not present in map");
+        let decimals = token.decimals.0;
+        match entry.operation.as_str() {
+            "deploy" => {
+                tx.metadata.brc20_operation = Some(Brc20Operation::Deploy(Brc20TokenDeployData {
+                    tick: token.display_ticker.clone(),
+                    max: u128_amount_to_decimals_str(token.max.0, decimals),
+                    lim: u128_amount_to_decimals_str(token.limit.0, decimals),
+                    dec: token.decimals.0.to_string(),
+                    address: token.address.clone(),
+                    inscription_id: token.inscription_id.clone(),
+                    self_mint: token.self_mint,
+                }));
+            }
+            "mint" => {
+                tx.metadata.brc20_operation = Some(Brc20Operation::Mint(Brc20BalanceData {
+                    tick: token.display_ticker.clone(),
+                    amt: u128_amount_to_decimals_str(entry.amount.0, decimals),
+                    address: entry.address.clone(),
+                    inscription_id: entry.inscription_id.clone(),
+                }));
+            }
+            "transfer" => {
+                tx.metadata.brc20_operation = Some(Brc20Operation::Transfer(Brc20BalanceData {
+                    tick: token.display_ticker.clone(),
+                    amt: u128_amount_to_decimals_str(entry.amount.0, decimals),
+                    address: entry.address.clone(),
+                    inscription_id: entry.inscription_id.clone(),
+                }));
+            }
+            "transfer_send" => {
+                tx.metadata.brc20_operation =
+                    Some(Brc20Operation::TransferSend(Brc20TransferData {
+                        tick: token.display_ticker.clone(),
+                        amt: u128_amount_to_decimals_str(entry.amount.0, decimals),
+                        sender_address: entry.address.clone(),
+                        receiver_address: entry.to_address.unwrap().clone(),
+                        inscription_id: entry.inscription_id,
+                    }));
+            }
+            // `transfer_receive` ops are not reflected in transaction metadata, they are sent as part of `transfer_send`.
+            _ => {}
+        }
     }
     Ok(())
 }

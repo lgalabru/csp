@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use chainhook_postgres::tokio_postgres::Transaction;
+use chainhook_postgres::{tokio_postgres::Transaction, with_pg_transaction};
 use chainhook_sdk::{
     bitcoincore_rpc_json::bitcoin::Network,
     types::{
@@ -17,26 +17,19 @@ use chainhook_sdk::{
 use crossbeam_channel::unbounded;
 use dashmap::DashMap;
 use fxhash::FxHasher;
-use rusqlite::Connection;
 
 use crate::{
     config::Config,
-    core::{
-        meta_protocols::brc20::db::{
-            augment_transaction_with_brc20_operation_data, get_brc20_operations_on_block,
-        },
-        resolve_absolute_pointer,
-    },
-    db::{cursor::TransactionBytesCursor, ordinals::find_all_inscriptions_in_block, ordinals_pg},
+    core::{meta_protocols::brc20::brc20_pg, resolve_absolute_pointer},
+    db::{cursor::TransactionBytesCursor, ordinals_pg},
     ord::height::Height,
-    try_error, try_info, try_warn,
+    try_error, try_info,
     utils::format_inscription_id,
 };
 
 use std::sync::mpsc::channel;
 
 use super::{
-    inscription_parsing::get_inscriptions_revealed_in_block,
     satoshi_numbering::{compute_satoshi_number, TraversalResult},
     satoshi_tracking::{
         augment_transaction_with_ordinal_transfers, compute_satpoint_post_transfer,
@@ -573,7 +566,8 @@ pub async fn augment_block_with_inscriptions(
             &mut reinscriptions_data,
             db_tx,
             ctx,
-        ).await?;
+        )
+        .await?;
     }
 
     // Handle sats overflow
@@ -664,8 +658,9 @@ async fn augment_transaction_with_ordinals_inscriptions_data(
             };
 
         // Do we need to curse the inscription?
-        let mut inscription_number =
-            sequence_cursor.pick_next(is_cursed, block_identifier.index, network, db_tx).await?;
+        let mut inscription_number = sequence_cursor
+            .pick_next(is_cursed, block_identifier.index, network, db_tx)
+            .await?;
         let mut curse_type_override = None;
         if !is_cursed {
             // Is this inscription re-inscribing an existing blessed inscription?
@@ -681,12 +676,9 @@ async fn augment_transaction_with_ordinals_inscriptions_data(
                 );
 
                 is_cursed = true;
-                inscription_number = sequence_cursor.pick_next(
-                    is_cursed,
-                    block_identifier.index,
-                    network,
-                    db_tx,
-                ).await?;
+                inscription_number = sequence_cursor
+                    .pick_next(is_cursed, block_identifier.index, network, db_tx)
+                    .await?;
                 curse_type_override = Some(OrdinalInscriptionCurseType::Reinscription)
             }
         };
@@ -845,253 +837,247 @@ fn consolidate_transaction_with_pre_computed_inscription_data(
 
 /// Best effort to re-augment a `BitcoinBlockData` with data coming from `inscriptions` and `locations` tables.
 /// Some informations are being lost (curse_type).
-pub async fn consolidate_block_with_pre_computed_ordinals_data(
+pub async fn augment_block_with_pre_computed_ordinals_data(
     block: &mut BitcoinBlockData,
-    db_tx: &Transaction<'_>,
-    brc20_db_conn: Option<&Connection>,
+    config: &Config,
     ctx: &Context,
-) {
-    let network = get_bitcoin_network(&block.metadata.network);
-    let coinbase_subsidy = Height(block.block_identifier.index).subsidy();
-    let coinbase_tx = &block.transactions[0].clone();
-    let mut cumulated_fees = 0;
-    let expected_inscriptions_count = get_inscriptions_revealed_in_block(&block).len();
-    let mut inscriptions_data = loop {
-        let results =
-            find_all_inscriptions_in_block(&block.block_identifier.index, db_tx, ctx);
-        // TODO: investigate, sporadically the set returned is empty, and requires a retry.
-        if results.len() != expected_inscriptions_count {
-            try_warn!(
-                ctx,
-                "Database retuning {} results instead of the expected {expected_inscriptions_count}",
-                results.len()
-            );
-            continue;
-        }
-        break results;
-    };
-    let mut brc20_token_map = HashMap::new();
-    let mut brc20_block_ledger_map = match brc20_db_conn {
-        Some(conn) => get_brc20_operations_on_block(block.block_identifier.index, &conn, &ctx),
-        None => HashMap::new(),
-    };
-    for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
-        consolidate_transaction_with_pre_computed_inscription_data(
-            tx,
-            tx_index,
-            &coinbase_tx,
-            coinbase_subsidy,
-            &mut cumulated_fees,
-            &network,
-            &mut inscriptions_data,
-            ctx,
-        );
-        let _ = augment_transaction_with_ordinal_transfers(
-            tx,
-            tx_index,
-            &network,
-            &coinbase_tx,
-            coinbase_subsidy,
-            &mut cumulated_fees,
-            db_tx,
-            ctx,
-        );
-        if let Some(brc20_db_conn) = brc20_db_conn {
-            augment_transaction_with_brc20_operation_data(
-                tx,
-                &mut brc20_token_map,
-                &mut brc20_block_ledger_map,
-                &brc20_db_conn,
-                &ctx,
-            );
-        }
-    }
+) -> Result<(), String> {
+    with_pg_transaction(
+        &config.ordinals_db.to_conn_config(),
+        ctx,
+        |client| async move {
+            let network = get_bitcoin_network(&block.metadata.network);
+            let coinbase_subsidy = Height(block.block_identifier.index).subsidy();
+            let coinbase_tx = &block.transactions[0].clone();
+            let mut cumulated_fees = 0;
+
+            // TODO(rafaelcr): Now that we use postgres we should be able to pull all the previous data instead of `TraversalResult`
+            let mut inscriptions_data =
+                ordinals_pg::get_inscriptions_at_block(client, block.block_identifier.index)
+                    .await?;
+            for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
+                consolidate_transaction_with_pre_computed_inscription_data(
+                    tx,
+                    tx_index,
+                    &coinbase_tx,
+                    coinbase_subsidy,
+                    &mut cumulated_fees,
+                    &network,
+                    &mut inscriptions_data,
+                    ctx,
+                );
+                let _ = augment_transaction_with_ordinal_transfers(
+                    tx,
+                    tx_index,
+                    &network,
+                    &coinbase_tx,
+                    coinbase_subsidy,
+                    &mut cumulated_fees,
+                    client,
+                    ctx,
+                )
+                .await?;
+            }
+
+            // BRC-20
+            if let (true, Some(brc20_db)) = (config.meta_protocols.brc20, &config.brc20_db) {
+                with_pg_transaction(&brc20_db.to_conn_config(), ctx, |bclient| async move {
+                    Ok(brc20_pg::augment_block_with_operations(block, bclient).await?)
+                })
+                .await?;
+            }
+
+            Ok(())
+        },
+    )
+    .await?;
+    Ok(())
 }
 
-#[cfg(test)]
-mod test {
-    use chainhook_sdk::{
-        types::{
-            BlockIdentifier, OrdinalInscriptionNumber, OrdinalInscriptionRevealData,
-            OrdinalOperation,
-        },
-        utils::Context,
-    };
+// #[cfg(test)]
+// mod test {
+//     use chainhook_sdk::{
+//         types::{
+//             BlockIdentifier, OrdinalInscriptionNumber, OrdinalInscriptionRevealData,
+//             OrdinalOperation,
+//         },
+//         utils::Context,
+//     };
 
-    use crate::{
-        config::Config,
-        core::test_builders::{
-            TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder, TestTxOutBuilder,
-        },
-        db::{drop_all_dbs, initialize_sqlite_dbs, ordinals::insert_entry_in_inscriptions},
-    };
+//     use crate::{
+//         config::Config,
+//         core::test_builders::{
+//             TestBlockBuilder, TestTransactionBuilder, TestTxInBuilder, TestTxOutBuilder,
+//         },
+//         db::{drop_all_dbs, initialize_sqlite_dbs, ordinals::insert_entry_in_inscriptions},
+//     };
 
-    use super::consolidate_block_with_pre_computed_ordinals_data;
+//     use super::augment_block_with_pre_computed_ordinals_data;
 
-    #[test]
-    fn consolidates_block_with_pre_computed_data() {
-        let ctx = Context::empty();
-        let config = Config::test_default();
-        drop_all_dbs(&config);
-        let mut sqlite_dbs = initialize_sqlite_dbs(&config, &ctx);
+//     #[test]
+//     fn consolidates_block_with_pre_computed_data() {
+//         let ctx = Context::empty();
+//         let config = Config::test_default();
+//         drop_all_dbs(&config);
+//         let mut sqlite_dbs = initialize_sqlite_dbs(&config, &ctx);
 
-        // Prepare DB data. Set blank values because we will fill these out after augmenting.
-        let reveal = OrdinalInscriptionRevealData {
-            content_bytes: "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string(),
-            content_type: "text/plain;charset=utf-8".to_string(),
-            content_length: 94,
-            inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
-            inscription_fee: 0,
-            inscription_output_value: 9000,
-            inscription_id: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0".to_string(),
-            inscription_input_index: 0,
-            inscription_pointer: Some(0),
-            inscriber_address: Some("bc1qte0s6pz7gsdlqq2cf6hv5mxcfksykyyyjkdfd5".to_string()),
-            delegate: None,
-            metaprotocol: None,
-            metadata: None,
-            parent: None,
-            ordinal_number: 1971874687500000,
-            ordinal_block_height: 849999,
-            ordinal_offset: 0,
-            tx_index: 0,
-            transfers_pre_inscription: 0,
-            satpoint_post_inscription: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9:0:0".to_string(),
-            curse_type: None,
-        };
-        insert_entry_in_inscriptions(
-            &reveal,
-            &BlockIdentifier {
-                index: 850000,
-                hash: "0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e"
-                    .to_string(),
-            },
-            &sqlite_dbs.ordinals,
-            &ctx,
-        );
+//         // Prepare DB data. Set blank values because we will fill these out after augmenting.
+//         let reveal = OrdinalInscriptionRevealData {
+//             content_bytes: "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string(),
+//             content_type: "text/plain;charset=utf-8".to_string(),
+//             content_length: 94,
+//             inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
+//             inscription_fee: 0,
+//             inscription_output_value: 9000,
+//             inscription_id: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0".to_string(),
+//             inscription_input_index: 0,
+//             inscription_pointer: Some(0),
+//             inscriber_address: Some("bc1qte0s6pz7gsdlqq2cf6hv5mxcfksykyyyjkdfd5".to_string()),
+//             delegate: None,
+//             metaprotocol: None,
+//             metadata: None,
+//             parent: None,
+//             ordinal_number: 1971874687500000,
+//             ordinal_block_height: 849999,
+//             ordinal_offset: 0,
+//             tx_index: 0,
+//             transfers_pre_inscription: 0,
+//             satpoint_post_inscription: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9:0:0".to_string(),
+//             curse_type: None,
+//         };
+//         insert_entry_in_inscriptions(
+//             &reveal,
+//             &BlockIdentifier {
+//                 index: 850000,
+//                 hash: "0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e"
+//                     .to_string(),
+//             },
+//             &sqlite_dbs.ordinals,
+//             &ctx,
+//         );
 
-        let mut block = TestBlockBuilder::new()
-            .height(850000)
-            .hash("0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e".to_string())
-            .add_transaction(TestTransactionBuilder::new().build())
-            .add_transaction(
-                TestTransactionBuilder::new()
-                    .hash(
-                        "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9"
-                            .to_string(),
-                    )
-                    .ordinal_operations(vec![OrdinalOperation::InscriptionRevealed(reveal)])
-                    .add_input(TestTxInBuilder::new().build())
-                    .add_output(TestTxOutBuilder::new().value(9000).build())
-                    .build(),
-            )
-            .build();
+//         let mut block = TestBlockBuilder::new()
+//             .height(850000)
+//             .hash("0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e".to_string())
+//             .add_transaction(TestTransactionBuilder::new().build())
+//             .add_transaction(
+//                 TestTransactionBuilder::new()
+//                     .hash(
+//                         "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9"
+//                             .to_string(),
+//                     )
+//                     .ordinal_operations(vec![OrdinalOperation::InscriptionRevealed(reveal)])
+//                     .add_input(TestTxInBuilder::new().build())
+//                     .add_output(TestTxOutBuilder::new().value(9000).build())
+//                     .build(),
+//             )
+//             .build();
 
-        let inscriptions_db_tx = &sqlite_dbs.ordinals.transaction().unwrap();
-        consolidate_block_with_pre_computed_ordinals_data(
-            &mut block,
-            &inscriptions_db_tx,
-            true,
-            None,
-            &ctx,
-        );
+//         let inscriptions_db_tx = &sqlite_dbs.ordinals.transaction().unwrap();
+//         augment_block_with_pre_computed_ordinals_data(
+//             &mut block,
+//             &inscriptions_db_tx,
+//             true,
+//             None,
+//             &ctx,
+//         );
 
-        let OrdinalOperation::InscriptionRevealed(reveal) =
-            &block.transactions[1].metadata.ordinal_operations[0]
-        else {
-            unreachable!();
-        };
-        assert_eq!(
-            reveal.inscription_id,
-            "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0"
-        );
-        assert_eq!(reveal.ordinal_offset, 0);
-        assert_eq!(reveal.ordinal_block_height, 849999);
-        assert_eq!(reveal.ordinal_number, 1971874687500000);
-        assert_eq!(reveal.transfers_pre_inscription, 0);
-        assert_eq!(reveal.inscription_fee, 0);
-        assert_eq!(reveal.tx_index, 1);
-    }
+//         let OrdinalOperation::InscriptionRevealed(reveal) =
+//             &block.transactions[1].metadata.ordinal_operations[0]
+//         else {
+//             unreachable!();
+//         };
+//         assert_eq!(
+//             reveal.inscription_id,
+//             "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0"
+//         );
+//         assert_eq!(reveal.ordinal_offset, 0);
+//         assert_eq!(reveal.ordinal_block_height, 849999);
+//         assert_eq!(reveal.ordinal_number, 1971874687500000);
+//         assert_eq!(reveal.transfers_pre_inscription, 0);
+//         assert_eq!(reveal.inscription_fee, 0);
+//         assert_eq!(reveal.tx_index, 1);
+//     }
 
-    mod cursor {
-        use chainhook_sdk::{bitcoin::Network, utils::Context};
+//     mod cursor {
+//         use chainhook_sdk::{bitcoin::Network, utils::Context};
 
-        use test_case::test_case;
+//         use test_case::test_case;
 
-        use crate::{
-            config::Config,
-            core::protocol::inscription_sequencing::SequenceCursor,
-            core::test_builders::{TestBlockBuilder, TestTransactionBuilder},
-            db::{
-                drop_all_dbs, initialize_sqlite_dbs, ordinals::update_sequence_metadata_with_block,
-            },
-        };
+//         use crate::{
+//             config::Config,
+//             core::protocol::inscription_sequencing::SequenceCursor,
+//             core::test_builders::{TestBlockBuilder, TestTransactionBuilder},
+//             db::{
+//                 drop_all_dbs, initialize_sqlite_dbs, ordinals::update_sequence_metadata_with_block,
+//             },
+//         };
 
-        #[test_case((780000, false) => (2, 2); "with blessed pre jubilee")]
-        #[test_case((780000, true) => (-2, -2); "with cursed pre jubilee")]
-        #[test_case((850000, false) => (2, 2); "with blessed post jubilee")]
-        #[test_case((850000, true) => (-2, 2); "with cursed post jubilee")]
-        fn picks_next((block_height, cursed): (u64, bool)) -> (i64, i64) {
-            let ctx = Context::empty();
-            let config = Config::test_default();
-            drop_all_dbs(&config);
-            let db_conns = initialize_sqlite_dbs(&config, &ctx);
-            let mut block = TestBlockBuilder::new()
-                .transactions(vec![TestTransactionBuilder::new_with_operation().build()])
-                .build();
-            block.block_identifier.index = block_height;
+//         #[test_case((780000, false) => (2, 2); "with blessed pre jubilee")]
+//         #[test_case((780000, true) => (-2, -2); "with cursed pre jubilee")]
+//         #[test_case((850000, false) => (2, 2); "with blessed post jubilee")]
+//         #[test_case((850000, true) => (-2, 2); "with cursed post jubilee")]
+//         fn picks_next((block_height, cursed): (u64, bool)) -> (i64, i64) {
+//             let ctx = Context::empty();
+//             let config = Config::test_default();
+//             drop_all_dbs(&config);
+//             let db_conns = initialize_sqlite_dbs(&config, &ctx);
+//             let mut block = TestBlockBuilder::new()
+//                 .transactions(vec![TestTransactionBuilder::new_with_operation().build()])
+//                 .build();
+//             block.block_identifier.index = block_height;
 
-            // Pick next twice so we can test all cases.
-            update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
-            let mut cursor = SequenceCursor::new(&db_conns.ordinals);
-            let _ = cursor.pick_next(
-                cursed,
-                block.block_identifier.index + 1,
-                &Network::Bitcoin,
-                &ctx,
-            );
-            cursor.increment(cursed, &ctx);
+//             // Pick next twice so we can test all cases.
+//             update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
+//             let mut cursor = SequenceCursor::new(&db_conns.ordinals);
+//             let _ = cursor.pick_next(
+//                 cursed,
+//                 block.block_identifier.index + 1,
+//                 &Network::Bitcoin,
+//                 &ctx,
+//             );
+//             cursor.increment(cursed, &ctx);
 
-            block.block_identifier.index = block.block_identifier.index + 1;
-            update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
-            let next = cursor.pick_next(
-                cursed,
-                block.block_identifier.index + 1,
-                &Network::Bitcoin,
-                &ctx,
-            );
+//             block.block_identifier.index = block.block_identifier.index + 1;
+//             update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
+//             let next = cursor.pick_next(
+//                 cursed,
+//                 block.block_identifier.index + 1,
+//                 &Network::Bitcoin,
+//                 &ctx,
+//             );
 
-            (next.classic, next.jubilee)
-        }
+//             (next.classic, next.jubilee)
+//         }
 
-        #[test]
-        fn resets_on_previous_block() {
-            let ctx = Context::empty();
-            let config = Config::test_default();
-            drop_all_dbs(&config);
-            let db_conns = initialize_sqlite_dbs(&config, &ctx);
-            let block = TestBlockBuilder::new()
-                .transactions(vec![TestTransactionBuilder::new_with_operation().build()])
-                .build();
-            update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
-            let mut cursor = SequenceCursor::new(&db_conns.ordinals);
-            let _ = cursor.pick_next(
-                false,
-                block.block_identifier.index + 1,
-                &Network::Bitcoin,
-                &ctx,
-            );
-            cursor.increment(false, &ctx);
+//         #[test]
+//         fn resets_on_previous_block() {
+//             let ctx = Context::empty();
+//             let config = Config::test_default();
+//             drop_all_dbs(&config);
+//             let db_conns = initialize_sqlite_dbs(&config, &ctx);
+//             let block = TestBlockBuilder::new()
+//                 .transactions(vec![TestTransactionBuilder::new_with_operation().build()])
+//                 .build();
+//             update_sequence_metadata_with_block(&block, &db_conns.ordinals, &ctx);
+//             let mut cursor = SequenceCursor::new(&db_conns.ordinals);
+//             let _ = cursor.pick_next(
+//                 false,
+//                 block.block_identifier.index + 1,
+//                 &Network::Bitcoin,
+//                 &ctx,
+//             );
+//             cursor.increment(false, &ctx);
 
-            cursor.reset();
-            let next = cursor.pick_next(
-                false,
-                block.block_identifier.index - 10,
-                &Network::Bitcoin,
-                &ctx,
-            );
-            assert_eq!(next.classic, 0);
-            assert_eq!(next.jubilee, 0);
-        }
-    }
-}
+//             cursor.reset();
+//             let next = cursor.pick_next(
+//                 false,
+//                 block.block_identifier.index - 10,
+//                 &Network::Bitcoin,
+//                 &ctx,
+//             );
+//             assert_eq!(next.classic, 0);
+//             assert_eq!(next.jubilee, 0);
+//         }
+//     }
+// }

@@ -38,7 +38,7 @@ use crate::{
     },
     db::{blocks::open_blocks_db_with_retry, cursor::TransactionBytesCursor, ordinals_pg},
     service::write_brc20_block_operations,
-    try_info,
+    try_error, try_info,
     utils::monitoring::PrometheusMonitoring,
 };
 
@@ -64,83 +64,90 @@ pub fn start_inscription_indexing_processor(
     let prometheus = prometheus.clone();
     let handle: JoinHandle<()> = hiro_system_kit::thread_named("Inscription indexing runloop")
         .spawn(move || {
-            let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
-            let garbage_collect_every_n_blocks = 100;
-            let mut garbage_collect_nth_block = 0;
+            hiro_system_kit::nestable_block_on(async move {
+                let cache_l2 = Arc::new(new_traversals_lazy_cache(2048));
+                let garbage_collect_every_n_blocks = 100;
+                let mut garbage_collect_nth_block = 0;
 
-            let mut inscriptions_db_conn_rw =
-                open_ordinals_db_rw(&config.expected_cache_path(), &ctx).unwrap();
-            let mut empty_cycles = 0;
+                let mut empty_cycles = 0;
 
-            let mut sequence_cursor = SequenceCursor::new();
-            let mut brc20_cache = brc20_new_cache(&config);
-            let mut brc20_db_conn_rw = brc20_new_rw_db_conn(&config, &ctx);
+                let mut sequence_cursor = SequenceCursor::new();
+                let mut brc20_cache = brc20_new_cache(&config);
+                let mut brc20_db_conn_rw = brc20_new_rw_db_conn(&config, &ctx);
 
-            loop {
-                let (compacted_blocks, mut blocks) = match commands_rx.try_recv() {
-                    Ok(PostProcessorCommand::ProcessBlocks(compacted_blocks, blocks)) => {
-                        empty_cycles = 0;
-                        (compacted_blocks, blocks)
-                    }
-                    Ok(PostProcessorCommand::Terminate) => {
-                        let _ = events_tx.send(PostProcessorEvent::Terminated);
-                        break;
-                    }
-                    Err(e) => match e {
-                        TryRecvError::Empty => {
-                            empty_cycles += 1;
-                            if empty_cycles == 180 {
-                                try_info!(ctx, "Block processor reached expiration");
-                                let _ = events_tx.send(PostProcessorEvent::Expired);
-                                break;
-                            }
-                            sleep(Duration::from_secs(1));
-                            continue;
+                loop {
+                    let (compacted_blocks, mut blocks) = match commands_rx.try_recv() {
+                        Ok(PostProcessorCommand::ProcessBlocks(compacted_blocks, blocks)) => {
+                            empty_cycles = 0;
+                            (compacted_blocks, blocks)
                         }
-                        _ => {
+                        Ok(PostProcessorCommand::Terminate) => {
+                            let _ = events_tx.send(PostProcessorEvent::Terminated);
                             break;
                         }
-                    },
-                };
+                        Err(e) => match e {
+                            TryRecvError::Empty => {
+                                empty_cycles += 1;
+                                if empty_cycles == 180 {
+                                    try_info!(ctx, "Block processor reached expiration");
+                                    let _ = events_tx.send(PostProcessorEvent::Expired);
+                                    break;
+                                }
+                                sleep(Duration::from_secs(1));
+                                continue;
+                            }
+                            _ => {
+                                break;
+                            }
+                        },
+                    };
 
-                {
-                    let blocks_db_rw = open_blocks_db_with_retry(true, &config, &ctx);
-                    store_compacted_blocks(
-                        compacted_blocks,
-                        true,
-                        &blocks_db_rw,
-                        &Context::empty(),
-                    );
+                    {
+                        let blocks_db_rw = open_blocks_db_with_retry(true, &config, &ctx);
+                        store_compacted_blocks(
+                            compacted_blocks,
+                            true,
+                            &blocks_db_rw,
+                            &Context::empty(),
+                        );
+                    }
+
+                    // Early return
+                    if blocks.is_empty() {
+                        continue;
+                    }
+
+                    try_info!(ctx, "Processing {} blocks", blocks.len());
+                    blocks = match process_blocks(
+                        &mut blocks,
+                        &mut sequence_cursor,
+                        &cache_l2,
+                        &mut brc20_cache,
+                        &post_processor,
+                        &prometheus,
+                        &config,
+                        &ctx,
+                    )
+                    .await
+                    {
+                        Ok(blocks) => blocks,
+                        Err(e) => {
+                            try_error!(ctx, "error processing blocks: {e}");
+                            vec![]
+                        }
+                    };
+
+                    garbage_collect_nth_block += blocks.len();
+                    if garbage_collect_nth_block > garbage_collect_every_n_blocks {
+                        try_info!(ctx, "Performing garbage collecting");
+
+                        // Clear L2 cache on a regular basis
+                        try_info!(ctx, "Clearing cache L2 ({} entries)", cache_l2.len());
+                        cache_l2.clear();
+                        garbage_collect_nth_block = 0;
+                    }
                 }
-
-                // Early return
-                if blocks.is_empty() {
-                    continue;
-                }
-
-                try_info!(ctx, "Processing {} blocks", blocks.len());
-                blocks = process_blocks(
-                    &mut blocks,
-                    &mut sequence_cursor,
-                    &cache_l2,
-                    &mut brc20_cache,
-                    &post_processor,
-                    &prometheus,
-                    &config,
-                    &ctx,
-                )
-                .await;
-
-                garbage_collect_nth_block += blocks.len();
-                if garbage_collect_nth_block > garbage_collect_every_n_blocks {
-                    try_info!(ctx, "Performing garbage collecting");
-
-                    // Clear L2 cache on a regular basis
-                    try_info!(ctx, "Clearing cache L2 ({} entries)", cache_l2.len());
-                    cache_l2.clear();
-                    garbage_collect_nth_block = 0;
-                }
-            }
+            });
         })
         .expect("unable to spawn thread");
 

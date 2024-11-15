@@ -26,21 +26,24 @@ pub fn brc20_self_mint_activation_height(network: &BitcoinNetwork) -> u64 {
     }
 }
 
-pub fn format_amount_with_decimals(amount: u128, decimals: u8) -> String {
-    let num_str = amount.to_string();
-    let (integer_part, fractional_part) = num_str.split_at(num_str.len() - decimals as usize);
-    format!("{}.{}", integer_part, fractional_part)
-}
-
-pub fn amount_to_u128_shift(amt: &String, decimals: u8) -> u128 {
+/// Transform a BRC-20 amount `String` (that may or may not have decimals) to a `u128` value we can store in Postgres. The amount
+/// will be shifted to the left by however many decimals the token uses.
+pub fn decimals_str_amount_to_u128(amt: &String, decimals: u8) -> u128 {
     let parts: Vec<&str> = amt.split('.').collect();
-    let first = (*parts.get(0).unwrap()).parse::<u128>().unwrap();
+    let integer = (*parts.get(0).unwrap()).parse::<u128>().unwrap();
 
     let decimal_str = *parts.get(1).unwrap();
     let mut padded = String::with_capacity(decimals as usize);
     padded.push_str(decimal_str);
     padded.push_str(&"0".repeat(decimals as usize - decimal_str.len()));
-    let second = padded.parse::<u128>().unwrap();
+    let fractional = padded.parse::<u128>().unwrap();
 
-    (first * 10u128.pow(decimals as u32)) + second
+    (integer * 10u128.pow(decimals as u32)) + fractional
+}
+
+/// Transform a BRC-20 amount which was stored in Postgres as a `u128` back to a `String` with decimals included.
+pub fn u128_amount_to_decimals_str(amount: u128, decimals: u8) -> String {
+    let num_str = amount.to_string();
+    let (integer, fractional) = num_str.split_at(num_str.len() - decimals as usize);
+    format!("{}.{}", integer, fractional)
 }

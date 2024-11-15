@@ -201,7 +201,7 @@ pub async fn augment_transaction_with_ordinal_transfers(
     cumulated_fees: &mut u64,
     db_tx: &Transaction<'_>,
     ctx: &Context,
-) -> Vec<OrdinalInscriptionTransferData> {
+) -> Result<Vec<OrdinalInscriptionTransferData>, String> {
     let mut transfers = vec![];
 
     // The transfers are inserted in storage after the inscriptions.
@@ -261,7 +261,7 @@ pub async fn augment_transaction_with_ordinal_transfers(
     }
     *cumulated_fees += tx.metadata.fee;
 
-    transfers
+    Ok(transfers)
 }
 
 #[cfg(test)]
