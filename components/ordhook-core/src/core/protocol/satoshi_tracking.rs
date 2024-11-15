@@ -21,7 +21,7 @@ use crate::{
 use super::inscription_sequencing::get_bitcoin_network;
 
 pub fn get_output_and_offset_from_satpoint(satpoint: &String) -> Result<(String, u64), String> {
-    let parts: Vec<&str> = satpoint.split(":").collect();
+    let parts: Vec<&str> = satpoint.split(':').collect();
     let inscription_id = parts
         .get(0)
         .ok_or("get_output_and_offset_from_satpoint: inscription_id not found")?;
