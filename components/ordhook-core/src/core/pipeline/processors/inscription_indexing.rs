@@ -18,10 +18,7 @@ use std::hash::BuildHasherDefault;
 
 use crate::{
     core::{
-        meta_protocols::brc20::{
-            cache::{brc20_new_cache, Brc20MemoryCache},
-            db::brc20_new_rw_db_conn,
-        },
+        meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache},
         pipeline::processors::block_archiving::store_compacted_blocks,
         protocol::{
             inscription_parsing::{
@@ -33,7 +30,7 @@ use crate::{
                 parallelize_inscription_data_computations, SequenceCursor,
             },
             satoshi_numbering::TraversalResult,
-            satoshi_tracking::augment_block_with_ordinal_transfers,
+            satoshi_tracking::augment_block_with_transfers,
         },
     },
     db::{blocks::open_blocks_db_with_retry, cursor::TransactionBytesCursor, ordinals_pg},
@@ -73,7 +70,6 @@ pub fn start_inscription_indexing_processor(
 
                 let mut sequence_cursor = SequenceCursor::new();
                 let mut brc20_cache = brc20_new_cache(&config);
-                let mut brc20_db_conn_rw = brc20_new_rw_db_conn(&config, &ctx);
 
                 loop {
                     let (compacted_blocks, mut blocks) = match commands_rx.try_recv() {
@@ -253,7 +249,9 @@ pub async fn process_block(
                 augment_block_with_inscriptions(block, sequence_cursor, cache_l1, tx, &inner_ctx)
                     .await?;
         }
-        let _ = augment_block_with_ordinal_transfers(block, tx, &inner_ctx);
+        let _ = augment_block_with_transfers(block, tx, &inner_ctx);
+
+        // Write data
 
         // BRC-20
         if let (Some(brc20_cache), Some(brc20_db)) = (brc20_cache, config.brc20_db.as_ref()) {
@@ -266,7 +264,8 @@ pub async fn process_block(
                     &ctx,
                 )
                 .await
-            });
+            })
+            .await?;
         }
 
         prometheus.metrics_block_indexed(block_height);

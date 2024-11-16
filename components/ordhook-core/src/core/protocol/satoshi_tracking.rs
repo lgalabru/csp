@@ -12,7 +12,7 @@ use chainhook_sdk::{
 
 use crate::{
     core::{compute_next_satpoint_data, SatPosition},
-    db::ordinals::find_inscribed_ordinals_at_wached_outpoint,
+    db::ordinals_pg,
     ord::height::Height,
     try_info,
     utils::format_outpoint_to_watch,
@@ -36,11 +36,11 @@ pub fn get_output_and_offset_from_satpoint(satpoint: &String) -> Result<(String,
     Ok((format!("{}:{}", inscription_id, output), offset))
 }
 
-pub async fn augment_block_with_ordinal_transfers(
+pub async fn augment_block_with_transfers(
     block: &mut BitcoinBlockData,
     db_tx: &Transaction<'_>,
     ctx: &Context,
-) -> bool {
+) -> Result<bool, String> {
     let mut any_event = false;
 
     let network = get_bitcoin_network(&block.metadata.network);
@@ -58,7 +58,7 @@ pub async fn augment_block_with_ordinal_transfers(
             db_tx,
             ctx,
         )
-        .await;
+        .await?;
         any_event |= !transfers.is_empty();
 
         // if update_db_tx {
@@ -83,7 +83,7 @@ pub async fn augment_block_with_ordinal_transfers(
         // }
     }
 
-    any_event
+    Ok(any_event)
 }
 
 pub fn compute_satpoint_post_transfer(
@@ -213,22 +213,25 @@ pub async fn augment_transaction_with_ordinal_transfers(
         }
     }
 
+    // For each satpoint inscribed retrieved, we need to compute the next outpoint to watch
+    let input_entries =
+        ordinals_pg::get_inscribed_satpoints_at_tx_inputs(&tx.metadata.inputs, db_tx).await?;
     for (input_index, input) in tx.metadata.inputs.iter().enumerate() {
-        let outpoint_pre_transfer = format_outpoint_to_watch(
-            &input.previous_output.txid,
-            input.previous_output.vout as usize,
-        );
-
-        let entries =
-            find_inscribed_ordinals_at_wached_outpoint(&outpoint_pre_transfer, &db_tx, ctx);
-        // For each satpoint inscribed retrieved, we need to compute the next
-        // outpoint to watch
+        let Some(entries) = input_entries.get(&input_index) else {
+            continue;
+        };
         for watched_satpoint in entries.into_iter() {
             if updated_sats.contains(&watched_satpoint.ordinal_number) {
                 continue;
             }
-            let satpoint_pre_transfer =
-                format!("{}:{}", outpoint_pre_transfer, watched_satpoint.offset);
+            let satpoint_pre_transfer = format!(
+                "{}:{}",
+                format_outpoint_to_watch(
+                    &input.previous_output.txid,
+                    input.previous_output.vout as usize,
+                ),
+                watched_satpoint.offset
+            );
 
             let (destination, satpoint_post_transfer, post_transfer_output_value) =
                 compute_satpoint_post_transfer(
@@ -252,8 +255,6 @@ pub async fn augment_transaction_with_ordinal_transfers(
             };
 
             transfers.push(transfer_data.clone());
-
-            // Attach transfer event
             tx.metadata
                 .ordinal_operations
                 .push(OrdinalOperation::InscriptionTransferred(transfer_data));

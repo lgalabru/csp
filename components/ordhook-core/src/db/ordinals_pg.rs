@@ -1,13 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chainhook_postgres::{
-    tokio_postgres::{Client, GenericClient},
+    tokio_postgres::{types::ToSql, Client, GenericClient},
     types::{PgBigIntU32, PgNumericU64},
+    utils,
 };
-use chainhook_sdk::types::{OrdinalInscriptionNumber, TransactionIdentifier};
+use chainhook_sdk::types::{bitcoin::TxIn, OrdinalInscriptionNumber, TransactionIdentifier};
 use refinery::embed_migrations;
 
-use crate::core::protocol::satoshi_numbering::TraversalResult;
+use crate::{core::protocol::satoshi_numbering::TraversalResult, utils::format_outpoint_to_watch};
+
+use super::ordinals::WatchedSatpoint;
 
 embed_migrations!("../../migrations/ordinals");
 pub async fn migrate(client: &mut Client) -> Result<(), String> {
@@ -143,6 +146,58 @@ pub async fn get_inscriptions_at_block<T: GenericClient>(
             transaction_identifier_inscription: TransactionIdentifier { hash: tx_id },
         };
         results.insert(inscription_id, traversal);
+    }
+    Ok(results)
+}
+
+pub async fn get_inscribed_satpoints_at_tx_inputs<T: GenericClient>(
+    inputs: &Vec<TxIn>,
+    client: &T,
+) -> Result<HashMap<usize, Vec<WatchedSatpoint>>, String> {
+    let mut results = HashMap::new();
+    for chunk in inputs.chunks(500) {
+        let outpoints: Vec<(String, String)> = chunk
+            .iter()
+            .enumerate()
+            .map(|(vin, input)| {
+                (
+                    vin.to_string(),
+                    format_outpoint_to_watch(
+                        &input.previous_output.txid,
+                        input.previous_output.vout as usize,
+                    ),
+                )
+            })
+            .collect();
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for (vin, input) in outpoints.iter() {
+            params.push(vin);
+            params.push(input);
+        }
+        let rows = client
+            .query(
+                &format!(
+                    "WITH inputs (vin, output) AS (VALUES {})
+                    SELECT i.vin, l.ordinal_number, l.\"offset\"
+                    FROM current_locations AS l
+                    INNER JOIN inputs AS i ON i.output = l.output",
+                    utils::multi_row_query_param_str(chunk.len(), 2)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("get_inscriptions_at_tx_inputs: {e}"))?;
+        for row in rows.iter() {
+            let vin: String = row.get("vin");
+            let vin_key = vin.parse::<usize>().unwrap();
+            let ordinal_number: PgNumericU64 = row.get("ordinal_number");
+            let offset: PgNumericU64 = row.get("offset");
+            let entry = results.entry(vin_key).or_insert(vec![]);
+            entry.push(WatchedSatpoint {
+                ordinal_number: ordinal_number.0,
+                offset: offset.0,
+            });
+        }
     }
     Ok(results)
 }

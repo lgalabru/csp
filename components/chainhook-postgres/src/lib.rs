@@ -1,4 +1,5 @@
 pub mod types;
+pub mod utils;
 
 use std::future::Future;
 

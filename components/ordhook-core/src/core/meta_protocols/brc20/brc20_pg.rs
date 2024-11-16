@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chainhook_postgres::{
     tokio_postgres::{types::ToSql, Client, GenericClient},
-    types::{PgNumericU128, PgNumericU64},
+    types::{PgNumericU128, PgNumericU64}, utils,
 };
 use chainhook_sdk::types::{
     BitcoinBlockData, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData, Brc20TransferData,
@@ -97,22 +97,6 @@ pub async fn get_unsent_token_transfer<T: GenericClient>(
     Ok(Some(DbOperation::from_pg_row(&row)))
 }
 
-fn chunk_insert_values_param_str(rows: usize, columns: usize) -> String {
-    let mut arg_num = 1;
-    let mut arg_str = String::new();
-    for row in 0..rows {
-        arg_str.push_str("(");
-        for i in 0..columns {
-            arg_str.push_str(format!("${},", arg_num + i).as_str());
-        }
-        arg_str.pop();
-        arg_str.push_str("),");
-        arg_num += columns;
-    }
-    arg_str.pop();
-    arg_str
-}
-
 pub async fn insert_tokens<T: GenericClient>(
     tokens: &Vec<DbToken>,
     client: &T,
@@ -144,7 +128,7 @@ pub async fn insert_tokens<T: GenericClient>(
                     (ticker, display_ticker, inscription_id, inscription_number, block_height, block_hash, tx_id, tx_index,
                     address, max, \"limit\", decimals, self_mint, minted_supply, burned_supply, tx_count, timestamp)
                     VALUES {}
-                    ON CONFLICT (ticker) DO NOTHING", chunk_insert_values_param_str(chunk.len(), 17)),
+                    ON CONFLICT (ticker) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 17)),
                 &params,
             )
             .await
@@ -181,7 +165,7 @@ pub async fn insert_operations<T: GenericClient>(
                     (ticker, operation, inscription_id, ordinal_number, block_height, block_hash, tx_id, tx_index, output,
                     \"offset\", timestamp, address, to_address, avail_balance, trans_balance)
                     VALUES {}
-                    ON CONFLICT (inscription_id, operation) DO NOTHING", chunk_insert_values_param_str(chunk.len(), 14)),
+                    ON CONFLICT (inscription_id, operation) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 14)),
                 &params,
             )
             .await
