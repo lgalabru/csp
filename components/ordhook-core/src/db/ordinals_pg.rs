@@ -479,9 +479,9 @@ pub async fn insert_block<T: GenericClient>(
             .get(&ordinal_number)
         {
             Some(current_location) => {
-                if new_location.block_height.0 > current_location.block_height.0
-                    || (new_location.block_height.0 == current_location.block_height.0
-                        && new_location.tx_index.0 > current_location.tx_index.0)
+                if new_location.block_height > current_location.block_height
+                    || (new_location.block_height == current_location.block_height
+                        && new_location.tx_index > current_location.tx_index)
                 {
                     current_locations.insert(ordinal_number, new_location);
                 }

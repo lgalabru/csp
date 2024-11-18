@@ -1,9 +1,9 @@
-use std::{error::Error, ops::AddAssign};
+use std::{cmp::Ordering, error::Error, ops::AddAssign};
 
 use bytes::{BufMut, BytesMut};
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PgBigIntU32(pub u32);
 
 impl ToSql for PgBigIntU32 {
@@ -38,6 +38,18 @@ impl<'a> FromSql<'a> for PgBigIntU32 {
 impl AddAssign<u32> for PgBigIntU32 {
     fn add_assign(&mut self, other: u32) {
         self.0 += other;
+    }
+}
+
+impl PartialOrd for PgBigIntU32 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.0.cmp(&other.0))
+    }
+}
+
+impl Ord for PgBigIntU32 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
     }
 }
 

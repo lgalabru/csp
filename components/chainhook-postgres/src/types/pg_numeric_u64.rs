@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{cmp::Ordering, error::Error};
 
 use bytes::BytesMut;
 use num_traits::ToPrimitive;
@@ -34,6 +34,18 @@ impl<'a> FromSql<'a> for PgNumericU64 {
 
     fn accepts(ty: &Type) -> bool {
         ty.name() == "numeric"
+    }
+}
+
+impl PartialOrd for PgNumericU64 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.0.cmp(&other.0))
+    }
+}
+
+impl Ord for PgNumericU64 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
     }
 }
 

@@ -3,7 +3,7 @@ use std::error::Error;
 use bytes::{BufMut, BytesMut};
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PgSmallIntU8(pub u8);
 
 impl ToSql for PgSmallIntU8 {

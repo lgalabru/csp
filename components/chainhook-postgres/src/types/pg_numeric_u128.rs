@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     error::Error,
     io::{Cursor, Read},
     ops::AddAssign,
@@ -64,7 +65,7 @@ pub fn pg_numeric_bytes_to_u128(raw: &[u8]) -> u128 {
     result
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PgNumericU128(pub u128);
 
 impl ToSql for PgNumericU128 {
@@ -104,6 +105,18 @@ impl AddAssign for PgNumericU128 {
 impl AddAssign<u128> for PgNumericU128 {
     fn add_assign(&mut self, other: u128) {
         self.0 += other;
+    }
+}
+
+impl PartialOrd for PgNumericU128 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.0.cmp(&other.0))
+    }
+}
+
+impl Ord for PgNumericU128 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
     }
 }
 
