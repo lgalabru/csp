@@ -5,12 +5,18 @@ use chainhook_postgres::{
     types::{PgBigIntU32, PgNumericU64},
     utils,
 };
-use chainhook_sdk::types::{bitcoin::TxIn, OrdinalInscriptionNumber, TransactionIdentifier};
+use chainhook_sdk::types::{
+    bitcoin::TxIn, BitcoinBlockData, OrdinalInscriptionNumber, OrdinalOperation,
+    TransactionIdentifier,
+};
 use refinery::embed_migrations;
 
 use crate::{core::protocol::satoshi_numbering::TraversalResult, utils::format_outpoint_to_watch};
 
-use super::ordinals::WatchedSatpoint;
+use super::{
+    models::{DbInscription, DbInscriptionRecursion, DbLocation},
+    ordinals::WatchedSatpoint,
+};
 
 embed_migrations!("../../migrations/ordinals");
 pub async fn migrate(client: &mut Client) -> Result<(), String> {
@@ -200,4 +206,193 @@ pub async fn get_inscribed_satpoints_at_tx_inputs<T: GenericClient>(
         }
     }
     Ok(results)
+}
+
+async fn insert_inscriptions<T: GenericClient>(
+    inscriptions: &Vec<DbInscription>,
+    client: &T,
+) -> Result<(), String> {
+    if inscriptions.len() == 0 {
+        return Ok(());
+    }
+    for chunk in inscriptions.chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for row in chunk.iter() {
+            params.push(&row.inscription_id);
+            params.push(&row.ordinal_number);
+            params.push(&row.number);
+            params.push(&row.classic_number);
+            params.push(&row.block_height);
+            params.push(&row.block_hash);
+            params.push(&row.tx_index);
+            params.push(&row.address);
+            params.push(&row.mime_type);
+            params.push(&row.content_type);
+            params.push(&row.content_length);
+            params.push(&row.content);
+            params.push(&row.fee);
+            params.push(&row.curse_type);
+            params.push(&row.recursive);
+            params.push(&row.input_index);
+            params.push(&row.pointer);
+            params.push(&row.metadata);
+            params.push(&row.metaprotocol);
+            params.push(&row.parent);
+            params.push(&row.delegate);
+            params.push(&row.timestamp);
+        }
+        client
+            .query(
+                &format!("INSERT INTO inscriptions
+                    (inscription_id, ordinal_number, number, classic_number, block_height, block_hash, tx_index, address,
+                    mime_type, content_type, content_length, content, fee, curse_type, recursive, input_index, pointer, metadata,
+                    metaprotocol, parent, delegate, timestamp)
+                    VALUES {}
+                    ON CONFLICT (number) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 22)),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("insert_inscriptions: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn insert_inscription_recursions<T: GenericClient>(
+    inscription_recursions: &Vec<DbInscriptionRecursion>,
+    client: &T,
+) -> Result<(), String> {
+    if inscription_recursions.len() == 0 {
+        return Ok(());
+    }
+    for chunk in inscription_recursions.chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for row in chunk.iter() {
+            params.push(&row.inscription_id);
+            params.push(&row.ref_inscription_id);
+        }
+        client
+            .query(
+                &format!(
+                    "INSERT INTO inscription_recursions
+                    (inscription_id, ref_inscription_id)
+                    VALUES {}
+                    ON CONFLICT (inscription_id, ref_inscription_id) DO NOTHING",
+                    utils::multi_row_query_param_str(chunk.len(), 2)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("insert_inscription_recursions: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn insert_locations<T: GenericClient>(locations: &Vec<DbLocation>, client: &T) -> Result<(), String> {
+    if locations.len() == 0 {
+        return Ok(());
+    }
+    for chunk in locations.chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for row in chunk.iter() {
+            params.push(&row.ordinal_number);
+            params.push(&row.block_height);
+            params.push(&row.tx_index);
+            params.push(&row.tx_id);
+            params.push(&row.block_hash);
+            params.push(&row.address);
+            params.push(&row.output);
+            params.push(&row.offset);
+            params.push(&row.prev_output);
+            params.push(&row.prev_offset);
+            params.push(&row.value);
+            params.push(&row.transfer_type);
+            params.push(&row.timestamp);
+        }
+        client
+            .query(
+                &format!(
+                    "WITH location_inserts AS (
+                        INSERT INTO locations (ordinal_number, block_height, tx_index, tx_id, block_hash, address, output, offset
+                            prev_output, prev_offset, value, transfer_type, timestamp)
+                        VALUES {}
+                        ON CONFLICT (ordinal_number, block_height, tx_index) DO NOTHING
+                        RETURNING ordinal_number, block_height, block_hash, tx_index
+                    ),
+                    prev_transfer_index AS (
+                        SELECT MAX(block_transfer_index) AS max
+                        FROM inscription_transfers
+                        WHERE block_height = (SELECT block_height FROM location_inserts LIMIT 1)
+                    ),
+                    moved_inscriptions AS (
+                        SELECT
+                        i.genesis_id, i.number, i.ordinal_number, li.block_height, li.block_hash, li.tx_index,
+                        (
+                            ROW_NUMBER() OVER (ORDER BY li.block_height ASC, li.tx_index ASC) + (SELECT COALESCE(max, -1) FROM prev_transfer_index)
+                        ) AS block_transfer_index
+                        FROM inscriptions AS i
+                        INNER JOIN location_inserts AS li ON li.ordinal_number = i.ordinal_number
+                        WHERE i.block_height < li.block_height OR (i.block_height = li.block_height AND i.tx_index < li.tx_index)
+                    )
+                    INSERT INTO inscription_transfers
+                        (genesis_id, number, ordinal_number, block_height, block_hash, tx_index, block_transfer_index)
+                        (SELECT * FROM moved_inscriptions)
+                        ON CONFLICT (block_height, block_transfer_index) DO NOTHING",
+                    utils::multi_row_query_param_str(chunk.len(), 13)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("insert_inscription_recursions: {e}"))?;
+    }
+    Ok(())
+}
+
+pub async fn insert_block<T: GenericClient>(
+    block: &BitcoinBlockData,
+    client: &T,
+) -> Result<(), String> {
+    let mut inscriptions = vec![];
+    let mut locations = vec![];
+    let mut inscription_recursions = vec![];
+    for (tx_index, tx) in block.transactions.iter().enumerate() {
+        for operation in tx.metadata.ordinal_operations.iter() {
+            match operation {
+                OrdinalOperation::InscriptionRevealed(reveal) => {
+                    let mut inscription = DbInscription::from_reveal(
+                        reveal,
+                        &block.block_identifier,
+                        tx_index,
+                        block.timestamp,
+                    );
+                    let recursions = DbInscriptionRecursion::from_reveal(reveal);
+                    if recursions.len() > 0 {
+                        inscription.recursive = true;
+                    }
+                    inscription_recursions.extend(recursions);
+                    inscriptions.push(inscription);
+                    locations.push(DbLocation::from_reveal(
+                        reveal,
+                        &block.block_identifier,
+                        &tx.transaction_identifier,
+                        tx_index,
+                        block.timestamp,
+                    ));
+                }
+                OrdinalOperation::InscriptionTransferred(transfer) => {
+                    locations.push(DbLocation::from_transfer(
+                        transfer,
+                        &block.block_identifier,
+                        &tx.transaction_identifier,
+                        tx_index,
+                        block.timestamp,
+                    ));
+                }
+            }
+        }
+    }
+
+    insert_inscriptions(&inscriptions, client).await?;
+    insert_inscription_recursions(&inscription_recursions, client).await?;
+    insert_locations(&locations, client).await?;
+    Ok(())
 }

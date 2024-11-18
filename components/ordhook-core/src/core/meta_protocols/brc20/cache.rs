@@ -10,7 +10,7 @@ use chainhook_sdk::types::{
 };
 use lru::LruCache;
 
-use crate::{config::Config, core::protocol::satoshi_tracking::get_output_and_offset_from_satpoint};
+use crate::{config::Config, core::protocol::satoshi_tracking::parse_output_and_offset_from_satpoint};
 
 use super::{
     brc20_pg,
@@ -171,7 +171,7 @@ impl Brc20MemoryCache {
         tx_identifier: &TransactionIdentifier,
         tx_index: u64,
     ) -> Result<(), String> {
-        let (output, offset) = get_output_and_offset_from_satpoint(&reveal.satpoint_post_inscription)?;
+        let (output, offset) = parse_output_and_offset_from_satpoint(&reveal.satpoint_post_inscription)?;
         let token = DbToken {
             inscription_id: reveal.inscription_id.clone(),
             inscription_number: reveal.inscription_number.jubilee,
@@ -230,7 +230,7 @@ impl Brc20MemoryCache {
         let Some(minted) = self.get_token_minted_supply(&data.tick, db_tx).await? else {
             unreachable!("BRC-20 deployed token should have a minted supply entry");
         };
-        let (output, offset) = get_output_and_offset_from_satpoint(&reveal.satpoint_post_inscription)?;
+        let (output, offset) = parse_output_and_offset_from_satpoint(&reveal.satpoint_post_inscription)?;
         self.token_minted_supplies
             .put(data.tick.clone(), minted + data.amt);
         let balance = self
@@ -278,7 +278,7 @@ impl Brc20MemoryCache {
         else {
             unreachable!("BRC-20 transfer insert attempted for an address with no balance");
         };
-        let (output, offset) = get_output_and_offset_from_satpoint(&reveal.satpoint_post_inscription)?;
+        let (output, offset) = parse_output_and_offset_from_satpoint(&reveal.satpoint_post_inscription)?;
         self.token_addr_avail_balances.put(
             format!("{}:{}", data.tick, data.address),
             balance - data.amt, // Decrease for sender.
@@ -317,7 +317,7 @@ impl Brc20MemoryCache {
         tx_index: u64,
         db_tx: &Transaction<'_>,
     ) -> Result<(), String> {
-        let (output, offset) = get_output_and_offset_from_satpoint(&transfer.satpoint_post_transfer)?;
+        let (output, offset) = parse_output_and_offset_from_satpoint(&transfer.satpoint_post_transfer)?;
         let transfer_row = self
             .get_unsent_transfer_row(transfer.ordinal_number, db_tx)
             .await?;

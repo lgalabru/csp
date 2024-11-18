@@ -6,7 +6,7 @@ CREATE TABLE inscriptions (
     block_height NUMERIC NOT NULL,
     block_hash TEXT NOT NULL,
     tx_index BIGINT NOT NULL,
-    address TEXT NOT NULL,
+    address TEXT,
     mime_type TEXT NOT NULL,
     content_type TEXT NOT NULL,
     content_length BIGINT NOT NULL,
@@ -15,13 +15,12 @@ CREATE TABLE inscriptions (
     curse_type TEXT,
     recursive BOOLEAN DEFAULT FALSE,
     input_index BIGINT NOT NULL,
-    pointer BIGINT,
+    pointer NUMERIC,
     metadata TEXT,
     metaprotocol TEXT,
     parent TEXT,
     delegate TEXT,
-    timestamp TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW())
+    timestamp TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX inscriptions_mime_type_index ON inscriptions (mime_type);
 CREATE INDEX inscriptions_recursive_index ON inscriptions (recursive);

@@ -2,6 +2,7 @@ pub mod blocks;
 pub mod cursor;
 pub mod ordinals;
 pub mod ordinals_pg;
+pub mod models;
 
 use blocks::{delete_blocks_in_block_range, open_blocks_db_with_retry};
 

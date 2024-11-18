@@ -20,20 +20,24 @@ use crate::{
 
 use super::inscription_sequencing::get_bitcoin_network;
 
-pub fn get_output_and_offset_from_satpoint(satpoint: &String) -> Result<(String, u64), String> {
+pub fn parse_output_and_offset_from_satpoint(
+    satpoint: &String,
+) -> Result<(String, Option<u64>), String> {
     let parts: Vec<&str> = satpoint.split(':').collect();
-    let inscription_id = parts
+    let tx_id = parts
         .get(0)
         .ok_or("get_output_and_offset_from_satpoint: inscription_id not found")?;
     let output = parts
         .get(1)
         .ok_or("get_output_and_offset_from_satpoint: output not found")?;
-    let offset: u64 = parts
-        .get(2)
-        .ok_or("get_output_and_offset_from_satpoint: offset not found")?
-        .parse()
-        .map_err(|e| format!("get_output_and_offset_from_satpoint offset parse error: {e}"))?;
-    Ok((format!("{}:{}", inscription_id, output), offset))
+    let offset: Option<u64> = match parts.get(2) {
+        Some(part) => Some(
+            part.parse::<u64>()
+                .map_err(|e| format!("parse_output_and_offset_from_satpoint: {e}"))?,
+        ),
+        None => None,
+    };
+    Ok((format!("{}:{}", tx_id, output), offset))
 }
 
 pub async fn augment_block_with_transfers(
@@ -60,27 +64,6 @@ pub async fn augment_block_with_transfers(
         )
         .await?;
         any_event |= !transfers.is_empty();
-
-        // if update_db_tx {
-        //     // Store transfers between each iteration
-        //     for transfer_data in transfers.into_iter() {
-        //         let (tx, output_index, offset) =
-        //             parse_satpoint_to_watch(&transfer_data.satpoint_post_transfer);
-        //         let outpoint_to_watch = format_outpoint_to_watch(&tx, output_index);
-        //         let data = OrdinalLocation {
-        //             offset,
-        //             block_height: block.block_identifier.index,
-        //             tx_index: transfer_data.tx_index,
-        //         };
-        //         insert_ordinal_transfer_in_locations_tx(
-        //             transfer_data.ordinal_number,
-        //             &outpoint_to_watch,
-        //             data,
-        //             inscriptions_db_tx,
-        //             &ctx,
-        //         );
-        //     }
-        // }
     }
 
     Ok(any_event)

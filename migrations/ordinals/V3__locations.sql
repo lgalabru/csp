@@ -5,7 +5,7 @@ CREATE TABLE locations (
     tx_index BIGINT NOT NULL,
     tx_id TEXT NOT NULL,
     block_hash TEXT NOT NULL,
-    address TEXT NOT NULL,
+    address TEXT,
     output TEXT NOT NULL,
     "offset" NUMERIC,
     prev_output TEXT,
