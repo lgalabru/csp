@@ -6,7 +6,7 @@ use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 use super::pg_numeric_u128::{pg_numeric_bytes_to_u128, u128_into_pg_numeric_bytes};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PgNumericU64(pub u64);
 
 impl ToSql for PgNumericU64 {

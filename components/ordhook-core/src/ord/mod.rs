@@ -15,6 +15,8 @@ pub mod inscription_id;
 pub mod media;
 pub mod sat;
 pub mod sat_point;
+pub mod degree;
+pub mod rarity;
 
 const DIFFCHANGE_INTERVAL: u64 =
     chainhook_sdk::bitcoincore_rpc::bitcoin::blockdata::constants::DIFFCHANGE_INTERVAL as u64;

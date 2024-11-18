@@ -14,7 +14,7 @@ use refinery::embed_migrations;
 use crate::{core::protocol::satoshi_numbering::TraversalResult, utils::format_outpoint_to_watch};
 
 use super::{
-    models::{DbInscription, DbInscriptionRecursion, DbLocation},
+    models::{DbCurrentLocation, DbInscription, DbInscriptionRecursion, DbLocation, DbSatoshi},
     ordinals::WatchedSatpoint,
 };
 
@@ -287,7 +287,10 @@ async fn insert_inscription_recursions<T: GenericClient>(
     Ok(())
 }
 
-async fn insert_locations<T: GenericClient>(locations: &Vec<DbLocation>, client: &T) -> Result<(), String> {
+async fn insert_locations<T: GenericClient>(
+    locations: &Vec<DbLocation>,
+    client: &T,
+) -> Result<(), String> {
     if locations.len() == 0 {
         return Ok(());
     }
@@ -342,7 +345,121 @@ async fn insert_locations<T: GenericClient>(locations: &Vec<DbLocation>, client:
                 &params,
             )
             .await
-            .map_err(|e| format!("insert_inscription_recursions: {e}"))?;
+            .map_err(|e| format!("insert_locations: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn insert_satoshis<T: GenericClient>(
+    satoshis: &Vec<DbSatoshi>,
+    client: &T,
+) -> Result<(), String> {
+    if satoshis.len() == 0 {
+        return Ok(());
+    }
+    for chunk in satoshis.chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for row in chunk.iter() {
+            params.push(&row.ordinal_number);
+            params.push(&row.rarity);
+            params.push(&row.coinbase_height);
+        }
+        client
+            .query(
+                &format!(
+                    "INSERT INTO satoshis
+                    (ordinal_number, rarity, coinbase_height)
+                    VALUES {}
+                    ON CONFLICT (ordinal_number) DO NOTHING",
+                    utils::multi_row_query_param_str(chunk.len(), 3)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("insert_satoshis: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn insert_current_locations<T: GenericClient>(
+    current_locations: &HashMap<PgNumericU64, DbCurrentLocation>,
+    client: &T,
+) -> Result<(), String> {
+    let moved_sats: Vec<&PgNumericU64> = current_locations.keys().collect();
+    let new_locations: Vec<&DbCurrentLocation> = current_locations.values().collect();
+    // Deduct counts from previous owners
+    for chunk in moved_sats.chunks(500) {
+        let c = chunk.to_vec();
+        client
+            .query(
+                "WITH prev_owners AS (
+                    SELECT address, COUNT(*) AS count
+                    FROM current_locations
+                    WHERE ordinal_number IN $1
+                    GROUP BY address
+                )
+                UPDATE counts_by_address AS c
+                SET c.count = (
+                    SELECT c.count - p.count
+                    FROM prev_owners AS p
+                    WHERE p.address = c.address
+                )
+                WHERE EXISTS (SELECT 1 FROM prev_owners AS p WHERE p.address = c.address)",
+                &[&c],
+            )
+            .await
+            .map_err(|e| format!("insert_current_locations: {e}"))?;
+    }
+    // Insert locations
+    for chunk in new_locations.chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for row in chunk.iter() {
+            params.push(&row.ordinal_number);
+            params.push(&row.block_height);
+            params.push(&row.tx_id);
+            params.push(&row.tx_index);
+            params.push(&row.address);
+            params.push(&row.output);
+            params.push(&row.offset);
+        }
+        client
+            .query(
+                &format!(
+                    "INSERT INTO current_locations (ordinal_number, block_height, tx_id, tx_index, address, output, offset)
+                    VALUES {}
+                    ON CONFLICT (ordinal_number) DO UPDATE SET
+                        block_height = EXCLUDED.block_height,
+                        tx_index = EXCLUDED.tx_index,
+                        address = EXCLUDED.address
+                    WHERE
+                        EXCLUDED.block_height > current_locations.block_height OR
+                        (EXCLUDED.block_height = current_locations.block_height AND
+                            EXCLUDED.tx_index > current_locations.tx_index)",
+                    utils::multi_row_query_param_str(chunk.len(), 7)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("insert_current_locations: {e}"))?;
+    }
+    // Update owner counts
+    for chunk in moved_sats.chunks(500) {
+        let c = chunk.to_vec();
+        client
+            .query(
+                "WITH new_owners AS (
+                    SELECT address, COUNT(*) AS count
+                    FROM current_locations
+                    WHERE ordinal_number IN $1
+                    GROUP BY address
+                )
+                INSERT INTO counts_by_address (address, count)
+                (SELECT address, count FROM new_owners)
+                ON CONFLICT (address) DO UPDATE SET count = counts_by_address.count + EXCLUDED.count",
+                &[&c],
+            )
+            .await
+            .map_err(|e| format!("insert_current_locations: {e}"))?;
     }
     Ok(())
 }
@@ -351,9 +468,28 @@ pub async fn insert_block<T: GenericClient>(
     block: &BitcoinBlockData,
     client: &T,
 ) -> Result<(), String> {
+    let mut satoshis = vec![];
     let mut inscriptions = vec![];
     let mut locations = vec![];
     let mut inscription_recursions = vec![];
+    let mut current_locations: HashMap<PgNumericU64, DbCurrentLocation> = HashMap::new();
+
+    let mut update_current_location =
+        |ordinal_number: PgNumericU64, new_location: DbCurrentLocation| match current_locations
+            .get(&ordinal_number)
+        {
+            Some(current_location) => {
+                if new_location.block_height.0 > current_location.block_height.0
+                    || (new_location.block_height.0 == current_location.block_height.0
+                        && new_location.tx_index.0 > current_location.tx_index.0)
+                {
+                    current_locations.insert(ordinal_number, new_location);
+                }
+            }
+            None => {
+                current_locations.insert(ordinal_number, new_location);
+            }
+        };
     for (tx_index, tx) in block.transactions.iter().enumerate() {
         for operation in tx.metadata.ordinal_operations.iter() {
             match operation {
@@ -377,6 +513,16 @@ pub async fn insert_block<T: GenericClient>(
                         tx_index,
                         block.timestamp,
                     ));
+                    satoshis.push(DbSatoshi::from_reveal(reveal));
+                    update_current_location(
+                        PgNumericU64(reveal.ordinal_number),
+                        DbCurrentLocation::from_reveal(
+                            reveal,
+                            &block.block_identifier,
+                            &tx.transaction_identifier,
+                            tx_index,
+                        ),
+                    );
                 }
                 OrdinalOperation::InscriptionTransferred(transfer) => {
                     locations.push(DbLocation::from_transfer(
@@ -386,6 +532,15 @@ pub async fn insert_block<T: GenericClient>(
                         tx_index,
                         block.timestamp,
                     ));
+                    update_current_location(
+                        PgNumericU64(transfer.ordinal_number),
+                        DbCurrentLocation::from_transfer(
+                            transfer,
+                            &block.block_identifier,
+                            &tx.transaction_identifier,
+                            tx_index,
+                        ),
+                    );
                 }
             }
         }
@@ -394,5 +549,7 @@ pub async fn insert_block<T: GenericClient>(
     insert_inscriptions(&inscriptions, client).await?;
     insert_inscription_recursions(&inscription_recursions, client).await?;
     insert_locations(&locations, client).await?;
+    insert_satoshis(&satoshis, client).await?;
+    insert_current_locations(&current_locations, client).await?;
     Ok(())
 }

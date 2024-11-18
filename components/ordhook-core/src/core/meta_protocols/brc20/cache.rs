@@ -207,7 +207,7 @@ impl Brc20MemoryCache {
             tx_id: tx_identifier.hash.clone(),
             tx_index: PgNumericU64(tx_index),
             output,
-            offset: PgNumericU64(offset),
+            offset: PgNumericU64(offset.unwrap()),
             timestamp: PgBigIntU32(timestamp),
             address: data.address.clone(),
             to_address: None,
@@ -254,7 +254,7 @@ impl Brc20MemoryCache {
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output,
-            offset: PgNumericU64(offset),
+            offset: PgNumericU64(offset.unwrap()),
             timestamp: PgBigIntU32(timestamp),
             to_address: None,
         });
@@ -296,7 +296,7 @@ impl Brc20MemoryCache {
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output,
-            offset: PgNumericU64(offset),
+            offset: PgNumericU64(offset.unwrap()),
             timestamp: PgBigIntU32(timestamp),
             to_address: None,
         };
@@ -334,7 +334,7 @@ impl Brc20MemoryCache {
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output: output.clone(),
-            offset: PgNumericU64(offset),
+            offset: PgNumericU64(offset.unwrap()),
             timestamp: PgBigIntU32(timestamp),
             to_address: Some(data.receiver_address.clone()),
         });
@@ -351,7 +351,7 @@ impl Brc20MemoryCache {
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output,
-            offset: PgNumericU64(offset),
+            offset: PgNumericU64(offset.unwrap()),
             timestamp: PgBigIntU32(timestamp),
             to_address: None,
         });
