@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use chainhook_postgres::{
     tokio_postgres::{types::ToSql, Client, GenericClient},
-    types::{PgNumericU128, PgNumericU64}, utils,
+    types::{PgNumericU128, PgNumericU64},
+    utils,
 };
 use chainhook_sdk::types::{
     BitcoinBlockData, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData, Brc20TransferData,
@@ -191,6 +192,14 @@ async fn get_operations_at_block<T: GenericClient>(
         map.insert(tx_index.0, DbOperation::from_pg_row(row));
     }
     Ok(map)
+}
+
+pub async fn insert_block_operations<T: GenericClient>(
+    block: &mut BitcoinBlockData,
+    client: &T,
+) -> Result<(), String> {
+    // FIXME
+    Ok(())
 }
 
 /// Adds previously-indexed BRC-20 operation metadata to a `BitcoinBlockData` block.

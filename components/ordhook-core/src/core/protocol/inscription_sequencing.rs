@@ -64,7 +64,6 @@ pub fn parallelize_inscription_data_computations(
     next_blocks: &Vec<BitcoinBlockData>,
     cache_l1: &mut BTreeMap<(TransactionIdentifier, usize, u64), TraversalResult>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
-    db_tx: &Transaction,
     config: &Config,
     ctx: &Context,
 ) -> Result<bool, String> {
@@ -80,8 +79,7 @@ pub fn parallelize_inscription_data_computations(
         block.block_identifier.index
     );
 
-    let (transactions_ids, l1_cache_hits) =
-        get_transactions_to_process(block, cache_l1, db_tx, ctx);
+    let (transactions_ids, l1_cache_hits) = get_transactions_to_process(block, cache_l1);
 
     let has_transactions_to_process = !transactions_ids.is_empty() || !l1_cache_hits.is_empty();
 
@@ -229,8 +227,7 @@ pub fn parallelize_inscription_data_computations(
                 let _ = tx_thread_pool[thread_index].send(Some(w));
             } else {
                 if let Some(next_block) = next_block_iter.next() {
-                    let (transactions_ids, _) =
-                        get_transactions_to_process(next_block, cache_l1, db_tx, ctx);
+                    let (transactions_ids, _) = get_transactions_to_process(next_block, cache_l1);
 
                     try_info!(
                         inner_ctx,
@@ -321,8 +318,6 @@ pub fn parallelize_inscription_data_computations(
 fn get_transactions_to_process(
     block: &BitcoinBlockData,
     cache_l1: &mut BTreeMap<(TransactionIdentifier, usize, u64), TraversalResult>,
-    db_tx: &Transaction,
-    ctx: &Context,
 ) -> (
     HashSet<(TransactionIdentifier, usize, u64)>,
     Vec<(TransactionIdentifier, usize, u64)>,
@@ -524,7 +519,7 @@ pub async fn augment_block_with_inscriptions(
     inscriptions_data: &mut BTreeMap<(TransactionIdentifier, usize, u64), TraversalResult>,
     db_tx: &Transaction<'_>,
     ctx: &Context,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     // Handle re-inscriptions
     let mut reinscriptions_data = HashMap::new();
     for (_, inscription_data) in inscriptions_data.iter() {
@@ -544,7 +539,6 @@ pub async fn augment_block_with_inscriptions(
 
     // Handle sat oveflows
     let mut sats_overflows = VecDeque::new();
-    let mut any_event = false;
 
     let network = get_bitcoin_network(&block.metadata.network);
     let coinbase_subsidy = Height(block.block_identifier.index).subsidy();
@@ -552,7 +546,7 @@ pub async fn augment_block_with_inscriptions(
     let mut cumulated_fees = 0u64;
 
     for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
-        any_event |= augment_transaction_with_ordinals_inscriptions_data(
+        augment_transaction_with_ordinals_inscriptions_data(
             tx,
             tx_index,
             &block.block_identifier,
@@ -594,7 +588,7 @@ pub async fn augment_block_with_inscriptions(
             inscription_data.transfers_pre_inscription,
         );
     }
-    Ok(any_event)
+    Ok(())
 }
 
 /// Given a `BitcoinTransactionData` that have been augmented with the functions `parse_inscriptions_in_raw_tx` or

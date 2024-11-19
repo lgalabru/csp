@@ -20,6 +20,12 @@ use crate::{
 
 use super::inscription_sequencing::get_bitcoin_network;
 
+#[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WatchedSatpoint {
+    pub ordinal_number: u64,
+    pub offset: u64,
+}
+
 pub fn parse_output_and_offset_from_satpoint(
     satpoint: &String,
 ) -> Result<(String, Option<u64>), String> {
@@ -44,15 +50,13 @@ pub async fn augment_block_with_transfers(
     block: &mut BitcoinBlockData,
     db_tx: &Transaction<'_>,
     ctx: &Context,
-) -> Result<bool, String> {
-    let mut any_event = false;
-
+) -> Result<(), String> {
     let network = get_bitcoin_network(&block.metadata.network);
     let coinbase_subsidy = Height(block.block_identifier.index).subsidy();
     let coinbase_tx = &block.transactions[0].clone();
     let mut cumulated_fees = 0;
     for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
-        let transfers = augment_transaction_with_ordinal_transfers(
+        let _ = augment_transaction_with_ordinal_transfers(
             tx,
             tx_index,
             &network,
@@ -63,10 +67,8 @@ pub async fn augment_block_with_transfers(
             ctx,
         )
         .await?;
-        any_event |= !transfers.is_empty();
     }
-
-    Ok(any_event)
+    Ok(())
 }
 
 pub fn compute_satpoint_post_transfer(

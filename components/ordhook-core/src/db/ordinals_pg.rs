@@ -11,11 +11,10 @@ use chainhook_sdk::types::{
 };
 use refinery::embed_migrations;
 
-use crate::{core::protocol::satoshi_numbering::TraversalResult, utils::format_outpoint_to_watch};
+use crate::{core::protocol::{satoshi_numbering::TraversalResult, satoshi_tracking::WatchedSatpoint}, utils::format_outpoint_to_watch};
 
-use super::{
-    models::{DbCurrentLocation, DbInscription, DbInscriptionRecursion, DbLocation, DbSatoshi},
-    ordinals::WatchedSatpoint,
+use super::models::{
+    DbCurrentLocation, DbInscription, DbInscriptionRecursion, DbLocation, DbSatoshi,
 };
 
 embed_migrations!("../../migrations/ordinals");

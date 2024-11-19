@@ -6,46 +6,24 @@ use ordhook::chainhook_sdk::chainhooks::types::{
     BitcoinChainhookSpecification, HttpHook, InscriptionFeedData, OrdinalsMetaProtocol,
 };
 use ordhook::chainhook_sdk::chainhooks::types::{
-    BitcoinPredicateType, ChainhookFullSpecification, HookAction, OrdinalOperations,
+    BitcoinPredicateType, HookAction, OrdinalOperations,
 };
-use ordhook::chainhook_sdk::indexer::bitcoin::{
-    build_http_client, download_and_parse_block_with_retry, retrieve_block_hash_with_retry,
-};
-use ordhook::chainhook_sdk::observer::BitcoinConfig;
-use ordhook::chainhook_sdk::types::{BitcoinBlockData, TransactionIdentifier};
 use ordhook::chainhook_sdk::utils::BlockHeights;
 use ordhook::chainhook_sdk::utils::Context;
 use ordhook::config::Config;
-use ordhook::core::meta_protocols::brc20::db::get_brc20_operations_on_block;
+use ordhook::core::first_inscription_height;
 use ordhook::core::pipeline::bitcoind_download_blocks;
 use ordhook::core::pipeline::processors::block_archiving::start_block_archiving_processor;
-use ordhook::core::protocol::inscription_parsing::parse_inscriptions_and_standardize_block;
-use ordhook::core::protocol::satoshi_numbering::compute_satoshi_number;
-use ordhook::core::{first_inscription_height, new_traversals_lazy_cache};
 use ordhook::db::blocks::{
     find_block_bytes_at_block_height, find_last_block_inserted, find_missing_blocks,
     open_blocks_db_with_retry, open_readonly_blocks_db,
 };
 use ordhook::db::cursor::BlockBytesCursor;
-use ordhook::db::ordinals::{
-    find_all_inscriptions_in_block, find_all_transfers_in_block, find_inscription_with_id,
-    get_default_ordinals_db_file_path, open_ordinals_db,
-};
-use ordhook::db::{
-    drop_block_data_from_all_dbs, initialize_sqlite_dbs, migrate_dbs, open_all_dbs_rw, ordinals_pg,
-};
-use ordhook::download::download_archive_datasets_if_required;
-use ordhook::scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate;
-use ordhook::service::observers::initialize_observers_db;
-use ordhook::service::{start_observer_forwarding, Service};
-use ordhook::utils::bitcoind::bitcoind_get_block_height;
-use ordhook::utils::monitoring::PrometheusMonitoring;
-use ordhook::{hex, try_error, try_info, try_warn};
-use reqwest::Client as HttpClient;
+use ordhook::db::{migrate_dbs, ordinals_pg};
+use ordhook::service::Service;
+use ordhook::try_info;
 use std::collections::HashSet;
-use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 use std::{process, u64};
@@ -62,150 +40,12 @@ enum Command {
     /// Generate a new configuration file
     #[clap(subcommand)]
     Config(ConfigCommand),
-    /// Scan the Bitcoin chain for inscriptions
-    #[clap(subcommand)]
-    Scan(ScanCommand),
     /// Stream Bitcoin blocks and index ordinals inscriptions and transfers
     #[clap(subcommand)]
     Service(ServiceCommand),
     /// Perform maintenance operations on local databases
     #[clap(subcommand)]
     Db(OrdhookDbCommand),
-}
-
-#[derive(Subcommand, PartialEq, Clone, Debug)]
-enum ScanCommand {
-    /// Scans blocks for Ordinals activities
-    #[clap(name = "blocks", bin_name = "blocks")]
-    Blocks(ScanBlocksCommand),
-    /// Retrieve activities for a given inscription
-    #[clap(name = "inscription", bin_name = "inscription")]
-    Inscription(ScanInscriptionCommand),
-    /// Retrieve activities for a given inscription
-    #[clap(name = "transaction", bin_name = "transaction")]
-    Transaction(ScanTransactionCommand),
-}
-
-#[derive(Parser, PartialEq, Clone, Debug)]
-struct ScanBlocksCommand {
-    /// Interval of blocks (--interval 767430:800000)
-    #[clap(long = "interval", conflicts_with = "blocks")]
-    pub blocks_interval: Option<String>,
-    /// List of blocks (--blocks 767430,767431,767433,800000)
-    #[clap(long = "blocks", conflicts_with = "interval")]
-    pub blocks: Option<String>,
-    /// Target Regtest network
-    #[clap(
-        long = "regtest",
-        conflicts_with = "testnet",
-        conflicts_with = "mainnet"
-    )]
-    pub regtest: bool,
-    /// Target Testnet network
-    #[clap(
-        long = "testnet",
-        conflicts_with = "regtest",
-        conflicts_with = "mainnet"
-    )]
-    pub testnet: bool,
-    /// Target Mainnet network
-    #[clap(
-        long = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub mainnet: bool,
-    /// Load config file path
-    #[clap(
-        long = "config-path",
-        conflicts_with = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub config_path: Option<String>,
-    /// Meta protocols
-    #[clap(long = "meta-protocols", conflicts_with = "config-path")]
-    pub meta_protocols: Option<String>,
-    /// HTTP Post activity to a URL
-    #[clap(long = "post-to")]
-    pub post_to: Option<String>,
-    /// HTTP Auth token
-    #[clap(long = "auth-token")]
-    pub auth_token: Option<String>,
-}
-
-#[derive(Parser, PartialEq, Clone, Debug)]
-struct ScanInscriptionCommand {
-    /// Inscription Id
-    pub inscription_id: String,
-    /// Target Regtest network
-    #[clap(
-        long = "regtest",
-        conflicts_with = "testnet",
-        conflicts_with = "mainnet"
-    )]
-    pub regtest: bool,
-    /// Target Testnet network
-    #[clap(
-        long = "testnet",
-        conflicts_with = "regtest",
-        conflicts_with = "mainnet"
-    )]
-    pub testnet: bool,
-    /// Target Mainnet network
-    #[clap(
-        long = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub mainnet: bool,
-    /// Load config file path
-    #[clap(
-        long = "config-path",
-        conflicts_with = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub config_path: Option<String>,
-}
-
-#[derive(Parser, PartialEq, Clone, Debug)]
-struct ScanTransactionCommand {
-    /// Block Hash
-    pub block_height: u64,
-    /// Inscription Id
-    pub transaction_id: String,
-    /// Input index
-    pub input_index: usize,
-    /// Target Regtest network
-    #[clap(
-        long = "regtest",
-        conflicts_with = "testnet",
-        conflicts_with = "mainnet"
-    )]
-    pub regtest: bool,
-    /// Target Testnet network
-    #[clap(
-        long = "testnet",
-        conflicts_with = "regtest",
-        conflicts_with = "mainnet"
-    )]
-    pub testnet: bool,
-    /// Target Mainnet network
-    #[clap(
-        long = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub mainnet: bool,
-    /// Load config file path
-    #[clap(
-        long = "config-path",
-        conflicts_with = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub config_path: Option<String>,
 }
 
 #[derive(Subcommand, PartialEq, Clone, Debug)]
@@ -536,190 +376,6 @@ pub fn main() {
 
 async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
     match opts.command {
-        Command::Scan(ScanCommand::Blocks(cmd)) => {
-            let config: Config = ConfigFile::default(
-                cmd.regtest,
-                cmd.testnet,
-                cmd.mainnet,
-                &cmd.config_path,
-                &cmd.meta_protocols,
-            )?;
-            // Download dataset if required
-            // If console:
-            // - Replay based on SQLite queries
-            // If post-to:
-            // - Replay that requires connection to bitcoind
-            let block_heights = parse_blocks_heights_spec(&cmd.blocks_interval, &cmd.blocks);
-            let mut block_range = block_heights
-                .get_sorted_entries()
-                .map_err(|_e| format!("Block start / end block spec invalid"))?;
-
-            if let Some(ref post_to) = cmd.post_to {
-                try_info!(ctx, "A fully synchronized bitcoind node is required for retrieving inscriptions content.");
-                try_info!(ctx, "Checking {}...", config.network.bitcoind_rpc_url);
-                let tip = bitcoind_get_block_height(&config, ctx);
-                if let Some(highest_desired) = block_range.pop_back() {
-                    if tip < highest_desired {
-                        try_error!(ctx, "Unable to scan desired block range: underlying bitcoind synchronized until block #{} ", tip);
-                    } else {
-                        try_info!(ctx, "Starting scan");
-                    }
-                    block_range.push_back(highest_desired);
-                }
-
-                let predicate_spec = build_predicate_from_cli(
-                    &config,
-                    post_to,
-                    Some(&block_heights),
-                    None,
-                    cmd.auth_token,
-                    false,
-                )?;
-
-                let _ = initialize_observers_db(&config, ctx);
-
-                scan_bitcoin_chainstate_via_rpc_using_predicate(
-                    &predicate_spec,
-                    &config,
-                    None,
-                    ctx,
-                )
-                .await?;
-            } else {
-                download_archive_datasets_if_required(&config, ctx).await;
-                let mut total_inscriptions = 0;
-                let mut total_transfers = 0;
-
-                let db_connections = initialize_sqlite_dbs(&config, ctx);
-                while let Some(block_height) = block_range.pop_front() {
-                    let inscriptions = find_all_inscriptions_in_block(
-                        &block_height,
-                        &db_connections.ordinals,
-                        ctx,
-                    );
-                    let locations =
-                        find_all_transfers_in_block(&block_height, &db_connections.ordinals, ctx);
-
-                    let mut total_transfers_in_block = 0;
-
-                    for (_, inscription) in inscriptions.iter() {
-                        println!("Inscription {} revealed at block #{} (inscription_number {}, ordinal_number {})", inscription.get_inscription_id(), block_height, inscription.inscription_number.jubilee, inscription.ordinal_number);
-                        if let Some(transfers) = locations.get(&inscription.ordinal_number) {
-                            for t in transfers.iter().skip(1) {
-                                total_transfers_in_block += 1;
-                                println!(
-                                    "\t→ Transferred in transaction {}",
-                                    t.transaction_identifier_location.hash
-                                );
-                            }
-                        }
-                    }
-                    for (inscription_id, transfers) in locations.iter() {
-                        println!("Inscription {}", inscription_id);
-                        for t in transfers.iter() {
-                            total_transfers_in_block += 1;
-                            println!(
-                                "\t→ Transferred in transaction {}",
-                                t.transaction_identifier_location.hash
-                            );
-                        }
-                    }
-                    match db_connections.brc20 {
-                        Some(ref conn) => {
-                            let activity = get_brc20_operations_on_block(block_height, &conn, ctx);
-                            for (_, row) in activity.iter() {
-                                if row.operation == "transfer_receive" {
-                                    continue;
-                                }
-                                println!(
-                                    "BRC-20 {} {} {}",
-                                    row.operation, row.tick, row.avail_balance
-                                );
-                            }
-                        }
-                        None => todo!(),
-                    }
-                    if total_transfers_in_block > 0 && !inscriptions.is_empty() {
-                        println!(
-                            "Inscriptions revealed: {}, inscriptions transferred: {total_transfers_in_block}",
-                            inscriptions.len()
-                        );
-                        println!("-----");
-                    }
-
-                    total_inscriptions += inscriptions.len();
-                    total_transfers += total_transfers_in_block;
-                }
-                if total_transfers == 0 && total_inscriptions == 0 {
-                    let db_file_path =
-                        get_default_ordinals_db_file_path(&config.expected_cache_path());
-                    try_warn!(ctx, "No data available. Check the validity of the range being scanned and the validity of your local database {}", db_file_path.display());
-                }
-            }
-        }
-        Command::Scan(ScanCommand::Inscription(cmd)) => {
-            let config: Config = ConfigFile::default(
-                cmd.regtest,
-                cmd.testnet,
-                cmd.mainnet,
-                &cmd.config_path,
-                &None,
-            )?;
-
-            let _ = download_archive_datasets_if_required(&config, ctx).await;
-
-            let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), ctx)?;
-            let (inscription, block_height) =
-                match find_inscription_with_id(&cmd.inscription_id, &inscriptions_db_conn, ctx)? {
-                    Some(entry) => entry,
-                    _ => {
-                        return Err(format!(
-                            "unable to retrieve inscription {}",
-                            cmd.inscription_id
-                        ));
-                    }
-                };
-            println!(
-                "Inscription {} revealed at block #{} (inscription_number {}, ordinal_number {})",
-                inscription.get_inscription_id(),
-                block_height,
-                inscription.inscription_number.jubilee,
-                inscription.ordinal_number
-            );
-        }
-        Command::Scan(ScanCommand::Transaction(cmd)) => {
-            let config: Config = ConfigFile::default(
-                cmd.regtest,
-                cmd.testnet,
-                cmd.mainnet,
-                &cmd.config_path,
-                &None,
-            )?;
-            let http_client = build_http_client();
-            let block = fetch_and_standardize_block(
-                &http_client,
-                cmd.block_height,
-                &config.get_event_observer_config().get_bitcoin_config(),
-                ctx,
-            )
-            .await?;
-            let transaction_identifier = TransactionIdentifier::new(&cmd.transaction_id);
-            let cache = new_traversals_lazy_cache(100);
-            let (res, _, mut back_trace) = compute_satoshi_number(
-                &block.block_identifier,
-                &transaction_identifier,
-                cmd.input_index,
-                0,
-                &Arc::new(cache),
-                &config,
-                ctx,
-            )?;
-            back_trace.reverse();
-            for (block_height, tx, index) in back_trace.iter() {
-                println!("{}\t{}:{}", block_height, hex::encode(tx), index);
-            }
-            println!("{:?}", res);
-        }
         Command::Service(subcmd) => match subcmd {
             ServiceCommand::Start(cmd) => {
                 let maintenance_enabled =
@@ -801,13 +457,12 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
         },
         Command::Db(OrdhookDbCommand::New(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-            // Create DB
-            initialize_sqlite_dbs(&config, ctx);
+            migrate_dbs(&config, ctx).await?;
             open_blocks_db_with_retry(true, &config, ctx);
         }
         Command::Db(OrdhookDbCommand::Sync(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
-            initialize_sqlite_dbs(&config, ctx);
+            migrate_dbs(&config, ctx).await?;
             let service = Service::new(config, ctx.clone());
             service.catch_up_to_bitcoin_chain_tip(None).await?;
         }
@@ -862,59 +517,30 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 "{} blocks will be deleted. Confirm? [Y/n]",
                 cmd.end_block - cmd.start_block + 1
             );
-            let mut buffer = String::new();
-            std::io::stdin().read_line(&mut buffer).unwrap();
-            if buffer.starts_with('n') {
-                return Err("Deletion aborted".to_string());
-            }
+            // FIXME
+            // let mut buffer = String::new();
+            // std::io::stdin().read_line(&mut buffer).unwrap();
+            // if buffer.starts_with('n') {
+            //     return Err("Deletion aborted".to_string());
+            // }
 
-            let (blocks_db_rw, sqlite_dbs_rw) = open_all_dbs_rw(&config, &ctx)?;
+            // let (blocks_db_rw, sqlite_dbs_rw) = open_all_dbs_rw(&config, &ctx)?;
 
-            drop_block_data_from_all_dbs(
-                cmd.start_block,
-                cmd.end_block,
-                &blocks_db_rw,
-                &sqlite_dbs_rw,
-                ctx,
-            )?;
-            info!(
-                ctx.expect_logger(),
-                "Cleaning ordhook_db: {} blocks dropped",
-                cmd.end_block - cmd.start_block + 1
-            );
+            // drop_block_data_from_all_dbs(
+            //     cmd.start_block,
+            //     cmd.end_block,
+            //     &blocks_db_rw,
+            //     &sqlite_dbs_rw,
+            //     ctx,
+            // )?;
+            // info!(
+            //     ctx.expect_logger(),
+            //     "Cleaning ordhook_db: {} blocks dropped",
+            //     cmd.end_block - cmd.start_block + 1
+            // );
         }
     }
     Ok(())
-}
-
-pub fn load_predicate_from_path(
-    predicate_path: &str,
-) -> Result<ChainhookFullSpecification, String> {
-    let file = std::fs::File::open(predicate_path)
-        .map_err(|e| format!("unable to read file {}\n{:?}", predicate_path, e))?;
-    let mut file_reader = BufReader::new(file);
-    let mut file_buffer = vec![];
-    file_reader
-        .read_to_end(&mut file_buffer)
-        .map_err(|e| format!("unable to read file {}\n{:?}", predicate_path, e))?;
-    let predicate: ChainhookFullSpecification = serde_json::from_slice(&file_buffer)
-        .map_err(|e| format!("unable to parse json file {}\n{:?}", predicate_path, e))?;
-    Ok(predicate)
-}
-
-pub async fn fetch_and_standardize_block(
-    http_client: &HttpClient,
-    block_height: u64,
-    bitcoin_config: &BitcoinConfig,
-    ctx: &Context,
-) -> Result<BitcoinBlockData, String> {
-    let block_hash =
-        retrieve_block_hash_with_retry(http_client, &block_height, bitcoin_config, ctx).await?;
-    let block_breakdown =
-        download_and_parse_block_with_retry(http_client, &block_hash, bitcoin_config, ctx).await?;
-
-    parse_inscriptions_and_standardize_block(block_breakdown, &bitcoin_config.network, ctx)
-        .map_err(|(e, _)| e)
 }
 
 pub fn build_predicate_from_cli(
@@ -964,35 +590,4 @@ pub fn build_predicate_from_cli(
     };
 
     Ok(predicate)
-}
-
-fn parse_blocks_heights_spec(
-    blocks_interval: &Option<String>,
-    blocks: &Option<String>,
-) -> BlockHeights {
-    let blocks = match (blocks_interval, blocks) {
-        (Some(interval), None) => {
-            let blocks = interval.split(':').collect::<Vec<_>>();
-            let start_block: u64 = blocks
-                .first()
-                .expect("unable to get start_block")
-                .parse::<u64>()
-                .expect("unable to parse start_block");
-            let end_block: u64 = blocks
-                .get(1)
-                .expect("unable to get end_block")
-                .parse::<u64>()
-                .expect("unable to parse end_block");
-            BlockHeights::BlockRange(start_block, end_block)
-        }
-        (None, Some(blocks)) => {
-            let blocks = blocks
-                .split(',')
-                .map(|b| b.parse::<u64>().expect("unable to parse block"))
-                .collect::<Vec<_>>();
-            BlockHeights::Blocks(blocks)
-        }
-        _ => unreachable!(),
-    };
-    blocks
 }

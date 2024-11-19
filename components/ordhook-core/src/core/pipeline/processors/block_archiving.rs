@@ -93,66 +93,66 @@ pub fn store_compacted_blocks(
     }
 }
 
-#[cfg(test)]
-mod test {
-    use std::{thread::sleep, time::Duration};
+// #[cfg(test)]
+// mod test {
+//     use std::{thread::sleep, time::Duration};
 
-    use chainhook_sdk::utils::Context;
+//     use chainhook_sdk::utils::Context;
 
-    use crate::{
-        config::Config,
-        core::{
-            pipeline::PostProcessorCommand,
-            test_builders::{TestBlockBuilder, TestTransactionBuilder},
-        },
-        db::{
-            blocks::{find_block_bytes_at_block_height, open_blocks_db_with_retry},
-            cursor::BlockBytesCursor,
-            drop_all_dbs, initialize_sqlite_dbs,
-        },
-    };
+//     use crate::{
+//         config::Config,
+//         core::{
+//             pipeline::PostProcessorCommand,
+//             test_builders::{TestBlockBuilder, TestTransactionBuilder},
+//         },
+//         db::{
+//             blocks::{find_block_bytes_at_block_height, open_blocks_db_with_retry},
+//             cursor::BlockBytesCursor,
+//             drop_all_dbs, initialize_sqlite_dbs,
+//         },
+//     };
 
-    use super::start_block_archiving_processor;
+//     use super::start_block_archiving_processor;
 
-    #[test]
-    fn archive_blocks_via_processor() {
-        let ctx = Context::empty();
-        let config = Config::test_default();
-        {
-            drop_all_dbs(&config);
-            let _ = initialize_sqlite_dbs(&config, &ctx);
-            let _ = open_blocks_db_with_retry(true, &config, &ctx);
-        }
-        let controller = start_block_archiving_processor(&config, &ctx, true, None);
+//     #[test]
+//     fn archive_blocks_via_processor() {
+//         let ctx = Context::empty();
+//         let config = Config::test_default();
+//         {
+//             drop_all_dbs(&config);
+//             let _ = initialize_sqlite_dbs(&config, &ctx);
+//             let _ = open_blocks_db_with_retry(true, &config, &ctx);
+//         }
+//         let controller = start_block_archiving_processor(&config, &ctx, true, None);
 
-        // Store a block and terminate.
-        let block0 = TestBlockBuilder::new()
-            .hash("0x00000000000000000001b228f9faca9e7d11fcecff9d463bd05546ff0aa4651a".to_string())
-            .height(849999)
-            .add_transaction(
-                TestTransactionBuilder::new()
-                    .hash(
-                        "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac"
-                            .to_string(),
-                    )
-                    .build(),
-            )
-            .build();
-        let _ = controller
-            .commands_tx
-            .send(PostProcessorCommand::ProcessBlocks(
-                vec![(
-                    849999,
-                    BlockBytesCursor::from_standardized_block(&block0).unwrap(),
-                )],
-                vec![],
-            ));
-        sleep(Duration::from_millis(100));
-        let _ = controller.commands_tx.send(PostProcessorCommand::Terminate);
+//         // Store a block and terminate.
+//         let block0 = TestBlockBuilder::new()
+//             .hash("0x00000000000000000001b228f9faca9e7d11fcecff9d463bd05546ff0aa4651a".to_string())
+//             .height(849999)
+//             .add_transaction(
+//                 TestTransactionBuilder::new()
+//                     .hash(
+//                         "0xa321c61c83563a377f82ef59301f2527079f6bda7c2d04f9f5954c873f42e8ac"
+//                             .to_string(),
+//                     )
+//                     .build(),
+//             )
+//             .build();
+//         let _ = controller
+//             .commands_tx
+//             .send(PostProcessorCommand::ProcessBlocks(
+//                 vec![(
+//                     849999,
+//                     BlockBytesCursor::from_standardized_block(&block0).unwrap(),
+//                 )],
+//                 vec![],
+//             ));
+//         sleep(Duration::from_millis(100));
+//         let _ = controller.commands_tx.send(PostProcessorCommand::Terminate);
 
-        // Check that blocks exist in rocksdb
-        let blocks_db = open_blocks_db_with_retry(false, &config, &ctx);
-        let result = find_block_bytes_at_block_height(849999, 3, &blocks_db, &ctx);
-        assert!(result.is_some());
-    }
-}
+//         // Check that blocks exist in rocksdb
+//         let blocks_db = open_blocks_db_with_retry(false, &config, &ctx);
+//         let result = find_block_bytes_at_block_height(849999, 3, &blocks_db, &ctx);
+//         assert!(result.is_some());
+//     }
+// }

@@ -4,7 +4,7 @@ pub mod protocol;
 #[cfg(test)]
 pub mod test_builders;
 
-use chainhook_postgres::pg_connect;
+use chainhook_postgres::{pg_connect, with_pg_connection};
 use dashmap::DashMap;
 use fxhash::{FxBuildHasher, FxHasher};
 use std::hash::BuildHasherDefault;
@@ -20,8 +20,7 @@ use crate::{
             open_blocks_db_with_retry,
         },
         cursor::TransactionBytesCursor,
-        ordinals::{find_latest_inscription_block_height, open_ordinals_db},
-        ordinals_pg::get_chain_tip_block_height,
+        ordinals_pg::{self, get_chain_tip_block_height},
     },
     utils::bitcoind::bitcoind_get_block_height,
 };
@@ -117,11 +116,18 @@ pub fn compute_next_satpoint_data(
     SatPosition::Output((selected_output_index, relative_offset_in_selected_output))
 }
 
-pub fn should_sync_rocks_db(config: &Config, ctx: &Context) -> Result<Option<(u64, u64)>, String> {
+pub async fn should_sync_rocks_db(
+    config: &Config,
+    ctx: &Context,
+) -> Result<Option<(u64, u64)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
-    let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), &ctx)?;
     let last_compressed_block = find_last_block_inserted(&blocks_db) as u64;
-    let last_indexed_block = match find_latest_inscription_block_height(&inscriptions_db_conn, ctx)?
+    let last_indexed_block = match with_pg_connection(
+        &config.ordinals_db.to_conn_config(),
+        ctx,
+        |client| async move { Ok(ordinals_pg::get_chain_tip_block_height(&client).await?) },
+    )
+    .await?
     {
         Some(last_indexed_block) => last_indexed_block,
         None => 0,

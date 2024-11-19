@@ -4,7 +4,6 @@ mod runloops;
 
 use crate::config::{Config, PredicatesApi};
 use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
-use crate::core::meta_protocols::brc20::db::write_augmented_block_to_brc20_db;
 use crate::core::meta_protocols::brc20::parser::ParsedBrc20Operation;
 use crate::core::meta_protocols::brc20::verifier::{
     verify_brc20_operation, verify_brc20_transfer, VerifiedBrc20Operation,
@@ -12,7 +11,9 @@ use crate::core::meta_protocols::brc20::verifier::{
 use crate::core::meta_protocols::brc20::{self, brc20_activation_height};
 use crate::core::pipeline::bitcoind_download_blocks;
 use crate::core::pipeline::processors::block_archiving::start_block_archiving_processor;
-use crate::core::pipeline::processors::inscription_indexing::{process_block, start_inscription_indexing_processor};
+use crate::core::pipeline::processors::inscription_indexing::{
+    process_block, start_inscription_indexing_processor,
+};
 use crate::core::protocol::inscription_parsing::{
     get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
 };
@@ -25,8 +26,7 @@ use crate::db::blocks::{
     find_missing_blocks, insert_entry_in_blocks, open_blocks_db_with_retry, run_compaction,
 };
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
-use crate::db::ordinals::{update_ordinals_db_with_block, update_sequence_metadata_with_block};
-use crate::db::{drop_block_data_from_all_dbs, open_all_dbs_rw, ordinals_pg};
+use crate::db::ordinals_pg;
 use crate::scan::bitcoin::process_block_with_predicates;
 use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
 use crate::service::runloops::start_bitcoin_scan_runloop;
@@ -41,8 +41,8 @@ use chainhook_sdk::chainhooks::types::{
     ChainhookSpecification,
 };
 use chainhook_sdk::observer::{
-    start_event_observer, BitcoinBlockDataCached, EventObserverConfig, HandleBlock,
-    ObserverCommand, ObserverEvent, ObserverSidecar,
+    start_event_observer, BitcoinBlockDataCached, EventObserverConfig, ObserverCommand,
+    ObserverEvent, ObserverSidecar,
 };
 use chainhook_sdk::types::{
     BitcoinBlockData, BlockIdentifier, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData,
@@ -84,7 +84,7 @@ impl Service {
         check_blocks_integrity: bool,
         stream_indexing_to_observers: bool,
     ) -> Result<(), String> {
-        // Start Prometheus monitoring server.
+        // 1: Initialize Prometheus monitoring server.
         if let Some(port) = self.config.network.prometheus_monitoring_port {
             let registry_moved = self.prometheus.registry.clone();
             let ctx_cloned = self.ctx.clone();
@@ -113,7 +113,7 @@ impl Service {
         self.prometheus
             .initialize(0, max_inscription_number as u64, chain_tip);
 
-        // Catch-up with chain tip.
+        // 2: Catch-up the ordinals index to Bitcoin chain tip.
         let mut event_observer_config = self.config.get_event_observer_config();
         let block_post_processor = if stream_indexing_to_observers && !observer_specs.is_empty() {
             let mut chainhook_config: ChainhookConfig = ChainhookConfig::new();
@@ -136,10 +136,8 @@ impl Service {
             .await?;
         try_info!(self.ctx, "Service: Streaming blocks start");
 
-        // Sidecar channels setup
-        let observer_sidecar = self.set_up_observer_sidecar_runloop()?;
-
-        // Create the chainhook runloop tx/rx comms
+        // 3: Set up the real-time ZMQ Bitcoin block streaming channels and start listening.
+        let zmq_observer_sidecar = self.set_up_bitcoin_zmq_observer_sidecar()?;
         let (observer_command_tx, observer_command_rx) = channel();
         let (observer_event_tx, observer_event_rx) = crossbeam_channel::unbounded();
         let inner_ctx = if self.config.logs.chainhook_internals {
@@ -183,14 +181,12 @@ impl Service {
             observer_command_tx.clone(),
             observer_command_rx,
             Some(observer_event_tx),
-            Some(observer_sidecar),
+            Some(zmq_observer_sidecar),
             None,
             inner_ctx,
         );
 
-        // If HTTP Predicates API is on, we start:
-        // - Thread pool in charge of performing replays
-        // - API server
+        // 4: Start the HTTP predicate server.
         self.start_main_runloop_with_dynamic_predicates(
             &observer_command_tx,
             observer_event_rx,
@@ -199,8 +195,8 @@ impl Service {
         Ok(())
     }
 
-    /// Starts the predicates HTTP server and the main Bitcoin processing runloop that will wait for ZMQ messages to arrive in
-    /// order to index blocks. This function will block the main thread indefinitely.
+    /// Starts the predicates HTTP server and the main Bitcoin processing runloop that will serve indexed Bitcoin blocks to
+    /// clients.
     pub fn start_main_runloop_with_dynamic_predicates(
         &self,
         observer_command_tx: &std::sync::mpsc::Sender<ObserverCommand>,
@@ -263,7 +259,7 @@ impl Service {
         Ok(())
     }
 
-    pub fn set_up_observer_sidecar_runloop(&self) -> Result<ObserverSidecar, String> {
+    fn set_up_bitcoin_zmq_observer_sidecar(&self) -> Result<ObserverSidecar, String> {
         let (block_mutator_in_tx, block_mutator_in_rx) = crossbeam_channel::unbounded();
         let (block_mutator_out_tx, block_mutator_out_rx) = crossbeam_channel::unbounded();
         let (chain_event_notifier_tx, chain_event_notifier_rx) = crossbeam_channel::unbounded();
@@ -271,35 +267,49 @@ impl Service {
             bitcoin_blocks_mutator: Some((block_mutator_in_tx, block_mutator_out_rx)),
             bitcoin_chain_event_notifier: Some(chain_event_notifier_tx),
         };
+        // TODO(rafaelcr): Move these outside so they can be used across blocks.
         let cache_l2 = Arc::new(new_traversals_lazy_cache(100_000));
         let mut brc20_cache = brc20_new_cache(&self.config);
         let ctx = self.ctx.clone();
         let config = self.config.clone();
         let prometheus = self.prometheus.clone();
 
-        let _ = hiro_system_kit::thread_named("Observer Sidecar Runloop").spawn(move || loop {
-            select! {
-                recv(block_mutator_in_rx) -> msg => {
-                    if let Ok((mut blocks_to_mutate, blocks_ids_to_rollback)) = msg {
-                        chainhook_sidecar_mutate_blocks(
-                            &mut blocks_to_mutate,
-                            &blocks_ids_to_rollback,
-                            &cache_l2,
-                            &mut brc20_cache,
-                            &prometheus,
-                            &config,
-                            &ctx,
-                        );
-                        let _ = block_mutator_out_tx.send(blocks_to_mutate);
+        hiro_system_kit::thread_named("Observer Sidecar Runloop")
+            .spawn(move || {
+                hiro_system_kit::nestable_block_on(async move {
+                    loop {
+                        select! {
+                            // Mutate a newly-received Bitcoin block and add any Ordinals or BRC-20 activity to it. Write index data to DB.
+                            recv(block_mutator_in_rx) -> msg => {
+                                if let Ok((mut blocks_to_mutate, blocks_ids_to_rollback)) = msg {
+                                    match chainhook_sidecar_mutate_blocks(
+                                        &mut blocks_to_mutate,
+                                        &blocks_ids_to_rollback,
+                                        &cache_l2,
+                                        &mut brc20_cache,
+                                        &prometheus,
+                                        &config,
+                                        &ctx,
+                                    ).await {
+                                        Ok(_) => {
+                                            let _ = block_mutator_out_tx.send(blocks_to_mutate);
+                                        },
+                                        Err(e) => {
+                                            try_error!(ctx, "block mutation error: {e}");
+                                        },
+                                    };
+                                }
+                            }
+                            recv(chain_event_notifier_rx) -> _msg => {
+                                // if let Ok(command) = msg {
+                                //     chainhook_sidecar_mutate_ordhook_db(command, &config, &ctx)
+                                // }
+                            }
+                        }
                     }
-                }
-                recv(chain_event_notifier_rx) -> msg => {
-                    if let Ok(command) = msg {
-                        chainhook_sidecar_mutate_ordhook_db(command, &config, &ctx)
-                    }
-                }
-            }
-        });
+                })
+            })
+            .expect("unable to spawn zmq thread");
 
         Ok(observer_sidecar)
     }
@@ -352,7 +362,9 @@ impl Service {
         bitcoind_wait_for_chain_tip(&self.config, &self.ctx);
 
         // 1: Catch up blocks DB so it is at least at the same height as the ordinals DB.
-        if let Some((start_block, end_block)) = should_sync_rocks_db(&self.config, &self.ctx)? {
+        if let Some((start_block, end_block)) =
+            should_sync_rocks_db(&self.config, &self.ctx).await?
+        {
             let blocks_post_processor = start_block_archiving_processor(
                 &self.config,
                 &self.ctx,
@@ -416,71 +428,6 @@ impl Service {
     }
 }
 
-fn chainhook_sidecar_mutate_ordhook_db(command: HandleBlock, config: &Config, ctx: &Context) {
-    let (blocks_db_rw, sqlite_dbs_rw) = match open_all_dbs_rw(&config, &ctx) {
-        Ok(dbs) => dbs,
-        Err(e) => {
-            try_error!(ctx, "Unable to open readwrite connection: {e}");
-            return;
-        }
-    };
-
-    match command {
-        HandleBlock::UndoBlock(block) => {
-            try_info!(
-                ctx,
-                "Re-org handling: reverting changes in block #{}",
-                block.block_identifier.index
-            );
-            let res = drop_block_data_from_all_dbs(
-                block.block_identifier.index,
-                block.block_identifier.index,
-                &blocks_db_rw,
-                &sqlite_dbs_rw,
-                ctx,
-            );
-            if let Err(e) = res {
-                try_error!(
-                    ctx,
-                    "Unable to rollback bitcoin block {}: {e}",
-                    block.block_identifier
-                );
-            }
-        }
-        HandleBlock::ApplyBlock(block) => {
-            let block_bytes = match BlockBytesCursor::from_standardized_block(&block) {
-                Ok(block_bytes) => block_bytes,
-                Err(e) => {
-                    try_error!(
-                        ctx,
-                        "Unable to compress block #{}: #{}",
-                        block.block_identifier.index,
-                        e.to_string()
-                    );
-                    return;
-                }
-            };
-            insert_entry_in_blocks(
-                block.block_identifier.index as u32,
-                &block_bytes,
-                true,
-                &blocks_db_rw,
-                &ctx,
-            );
-            if let Err(e) = blocks_db_rw.flush() {
-                try_error!(ctx, "{}", e.to_string());
-            }
-
-            update_ordinals_db_with_block(&block, &sqlite_dbs_rw.ordinals, ctx);
-            update_sequence_metadata_with_block(&block, &sqlite_dbs_rw.ordinals, &ctx);
-
-            if let Some(brc20_conn_rw) = &sqlite_dbs_rw.brc20 {
-                write_augmented_block_to_brc20_db(&block, brc20_conn_rw, ctx);
-            }
-        }
-    }
-}
-
 pub fn start_observer_forwarding(
     event_observer_config: &EventObserverConfig,
     ctx: &Context,
@@ -516,7 +463,7 @@ pub fn start_observer_forwarding(
     tx_replayer
 }
 
-pub fn chainhook_sidecar_mutate_blocks(
+pub async fn chainhook_sidecar_mutate_blocks(
     blocks_to_mutate: &mut Vec<BitcoinBlockDataCached>,
     blocks_ids_to_rollback: &Vec<BlockIdentifier>,
     cache_l2: &Arc<DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>>,
@@ -524,38 +471,25 @@ pub fn chainhook_sidecar_mutate_blocks(
     prometheus: &PrometheusMonitoring,
     config: &Config,
     ctx: &Context,
-) {
-    let mut updated_blocks_ids = vec![];
+) -> Result<(), String> {
+    let blocks_db_rw = open_blocks_db_with_retry(true, &config, ctx);
 
-    let (blocks_db_rw, mut sqlite_dbs_rw) = match open_all_dbs_rw(&config, &ctx) {
-        Ok(dbs) => dbs,
-        Err(e) => {
-            try_error!(ctx, "Unable to open readwrite connection: {e}");
-            return;
-        }
-    };
-
-    for block_id_to_rollback in blocks_ids_to_rollback.iter() {
-        if let Err(e) = drop_block_data_from_all_dbs(
-            block_id_to_rollback.index,
-            block_id_to_rollback.index,
-            &blocks_db_rw,
-            &sqlite_dbs_rw,
-            &ctx,
-        ) {
-            try_error!(
-                ctx,
-                "Unable to rollback bitcoin block {}: {e}",
-                block_id_to_rollback.index
-            );
-        }
+    for _block_id_to_rollback in blocks_ids_to_rollback.iter() {
+        // FIXME
+        // if let Err(e) = drop_block_data_from_all_dbs(
+        //     block_id_to_rollback.index,
+        //     block_id_to_rollback.index,
+        //     &blocks_db_rw,
+        //     &sqlite_dbs_rw,
+        //     &ctx,
+        // ) {
+        //     try_error!(
+        //         ctx,
+        //         "Unable to rollback bitcoin block {}: {e}",
+        //         block_id_to_rollback.index
+        //     );
+        // }
     }
-
-    let brc20_db_tx = sqlite_dbs_rw
-        .brc20
-        .as_mut()
-        .map(|c| c.transaction().unwrap());
-    let inscriptions_db_tx = sqlite_dbs_rw.ordinals.transaction().unwrap();
 
     for cache in blocks_to_mutate.iter_mut() {
         let block_bytes = match BlockBytesCursor::from_standardized_block(&cache.block) {
@@ -578,20 +512,16 @@ pub fn chainhook_sidecar_mutate_blocks(
             &blocks_db_rw,
             &ctx,
         );
-        if let Err(e) = blocks_db_rw.flush() {
-            try_error!(ctx, "{}", e.to_string());
-        }
+        blocks_db_rw
+            .flush()
+            .map_err(|e| format!("error inserting block to rocksdb: {e}"))?;
 
-        if cache.processed_by_sidecar {
-            update_ordinals_db_with_block(&cache.block, &inscriptions_db_tx, &ctx);
-            update_sequence_metadata_with_block(&cache.block, &inscriptions_db_tx, &ctx);
-        } else {
-            updated_blocks_ids.push(format!("{}", cache.block.block_identifier.index));
-
+        if !cache.processed_by_sidecar {
             let mut cache_l1 = BTreeMap::new();
             let mut sequence_cursor = SequenceCursor::new();
 
-            let _ = process_block(
+            // Index block and write data to DB.
+            process_block(
                 &mut cache.block,
                 &vec![],
                 &mut sequence_cursor,
@@ -601,16 +531,15 @@ pub fn chainhook_sidecar_mutate_blocks(
                 prometheus,
                 &config,
                 &ctx,
-            );
+            )
+            .await?;
 
             let inscription_numbers = get_inscriptions_revealed_in_block(&cache.block)
                 .iter()
                 .map(|d| d.get_inscription_number().to_string())
                 .collect::<Vec<String>>();
-
             let inscriptions_transferred =
                 get_inscriptions_transferred_in_block(&cache.block).len();
-
             try_info!(
                 ctx,
                 "Block #{} processed, mutated and revealed {} inscriptions [{}] and {inscriptions_transferred} transfers",
@@ -621,16 +550,10 @@ pub fn chainhook_sidecar_mutate_blocks(
             cache.processed_by_sidecar = true;
         }
     }
-    let _ = inscriptions_db_tx.rollback();
-
-    if let Some(tx) = brc20_db_tx {
-        let _ = tx.rollback();
-    }
+    Ok(())
 }
 
-/// Writes BRC-20 data already included in the augmented `BitcoinBlockData` onto the BRC-20 database. Only called if BRC-20 is
-/// enabled.
-pub async fn write_brc20_block_operations(
+pub async fn augment_block_with_brc20_operations(
     block: &mut BitcoinBlockData,
     brc20_operation_map: &mut HashMap<String, ParsedBrc20Operation>,
     brc20_cache: &mut Brc20MemoryCache,
