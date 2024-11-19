@@ -510,13 +510,13 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 println!("{:?}", missing_blocks);
             }
         }
-        Command::Db(OrdhookDbCommand::Drop(cmd)) => {
-            let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
+        Command::Db(OrdhookDbCommand::Drop(_cmd)) => {
+            // let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
 
-            println!(
-                "{} blocks will be deleted. Confirm? [Y/n]",
-                cmd.end_block - cmd.start_block + 1
-            );
+            // println!(
+            //     "{} blocks will be deleted. Confirm? [Y/n]",
+            //     cmd.end_block - cmd.start_block + 1
+            // );
             // FIXME
             // let mut buffer = String::new();
             // std::io::stdin().read_line(&mut buffer).unwrap();

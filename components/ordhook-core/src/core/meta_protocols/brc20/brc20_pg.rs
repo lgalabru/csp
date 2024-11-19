@@ -194,14 +194,6 @@ async fn get_operations_at_block<T: GenericClient>(
     Ok(map)
 }
 
-pub async fn insert_block_operations<T: GenericClient>(
-    block: &mut BitcoinBlockData,
-    client: &T,
-) -> Result<(), String> {
-    // FIXME
-    Ok(())
-}
-
 /// Adds previously-indexed BRC-20 operation metadata to a `BitcoinBlockData` block.
 pub async fn augment_block_with_operations<T: GenericClient>(
     block: &mut BitcoinBlockData,

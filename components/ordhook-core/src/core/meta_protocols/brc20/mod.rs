@@ -6,6 +6,7 @@ pub mod parser;
 pub mod test_utils;
 pub mod verifier;
 pub mod models;
+pub mod index;
 
 pub fn brc20_activation_height(network: &BitcoinNetwork) -> u64 {
     match network {

@@ -18,7 +18,7 @@ use std::hash::BuildHasherDefault;
 
 use crate::{
     core::{
-        meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache},
+        meta_protocols::brc20::{cache::{brc20_new_cache, Brc20MemoryCache}, index::index_block_and_insert_brc20_operations},
         pipeline::processors::block_archiving::store_compacted_blocks,
         protocol::{
             inscription_parsing::{
@@ -34,7 +34,6 @@ use crate::{
         },
     },
     db::{blocks::open_blocks_db_with_retry, cursor::TransactionBytesCursor, ordinals_pg},
-    service::augment_block_with_brc20_operations,
     try_error, try_info,
     utils::monitoring::PrometheusMonitoring,
 };
@@ -255,7 +254,7 @@ pub async fn process_block(
         // BRC-20
         if let (Some(brc20_cache), Some(brc20_db)) = (brc20_cache, config.brc20_db.as_ref()) {
             with_pg_transaction(&brc20_db.to_conn_config(), ctx, |brc20_tx| async move {
-                augment_block_with_brc20_operations(
+                index_block_and_insert_brc20_operations(
                     block,
                     &mut brc20_operation_map,
                     brc20_cache,
