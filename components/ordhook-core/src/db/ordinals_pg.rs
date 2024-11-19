@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use chainhook_postgres::{
-    tokio_postgres::{types::ToSql, Client, GenericClient},
-    types::{PgBigIntU32, PgNumericU64},
-    utils,
+    deadpool_postgres::GenericClient, tokio_postgres::{types::ToSql, Client}, types::{PgBigIntU32, PgNumericU64}, utils
 };
 use chainhook_sdk::types::{
     bitcoin::TxIn, BitcoinBlockData, OrdinalInscriptionNumber, OrdinalOperation,

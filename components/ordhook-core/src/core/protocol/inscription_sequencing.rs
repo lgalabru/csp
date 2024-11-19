@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use chainhook_postgres::{tokio_postgres::Transaction, with_pg_transaction};
+use chainhook_postgres::{deadpool_postgres::Transaction, with_pg_transaction};
 use chainhook_sdk::{
     bitcoincore_rpc_json::bitcoin::Network,
     types::{
@@ -23,6 +23,7 @@ use crate::{
     core::{meta_protocols::brc20::brc20_pg, resolve_absolute_pointer},
     db::{cursor::TransactionBytesCursor, ordinals_pg},
     ord::height::Height,
+    service::PgConnectionPools,
     try_error, try_info,
     utils::format_inscription_id,
 };
@@ -834,56 +835,52 @@ fn consolidate_transaction_with_pre_computed_inscription_data(
 pub async fn augment_block_with_pre_computed_ordinals_data(
     block: &mut BitcoinBlockData,
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<(), String> {
-    with_pg_transaction(
-        &config.ordinals_db.to_conn_config(),
-        ctx,
-        |client| async move {
-            let network = get_bitcoin_network(&block.metadata.network);
-            let coinbase_subsidy = Height(block.block_identifier.index).subsidy();
-            let coinbase_tx = &block.transactions[0].clone();
-            let mut cumulated_fees = 0;
+    with_pg_transaction(&pg_pools.ordinals, |client| async move {
+        let network = get_bitcoin_network(&block.metadata.network);
+        let coinbase_subsidy = Height(block.block_identifier.index).subsidy();
+        let coinbase_tx = &block.transactions[0].clone();
+        let mut cumulated_fees = 0;
 
-            // TODO(rafaelcr): Now that we use postgres we should be able to pull all the previous data instead of `TraversalResult`
-            let mut inscriptions_data =
-                ordinals_pg::get_inscriptions_at_block(client, block.block_identifier.index)
-                    .await?;
-            for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
-                consolidate_transaction_with_pre_computed_inscription_data(
-                    tx,
-                    tx_index,
-                    &coinbase_tx,
-                    coinbase_subsidy,
-                    &mut cumulated_fees,
-                    &network,
-                    &mut inscriptions_data,
-                    ctx,
-                );
-                let _ = augment_transaction_with_ordinal_transfers(
-                    tx,
-                    tx_index,
-                    &network,
-                    &coinbase_tx,
-                    coinbase_subsidy,
-                    &mut cumulated_fees,
-                    client,
-                    ctx,
-                )
-                .await?;
-            }
+        // TODO(rafaelcr): Now that we use postgres we should be able to pull all the previous data instead of `TraversalResult`
+        let mut inscriptions_data =
+            ordinals_pg::get_inscriptions_at_block(client, block.block_identifier.index).await?;
+        for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
+            consolidate_transaction_with_pre_computed_inscription_data(
+                tx,
+                tx_index,
+                &coinbase_tx,
+                coinbase_subsidy,
+                &mut cumulated_fees,
+                &network,
+                &mut inscriptions_data,
+                ctx,
+            );
+            let _ = augment_transaction_with_ordinal_transfers(
+                tx,
+                tx_index,
+                &network,
+                &coinbase_tx,
+                coinbase_subsidy,
+                &mut cumulated_fees,
+                client,
+                ctx,
+            )
+            .await?;
+        }
 
-            // BRC-20
-            if let (true, Some(brc20_db)) = (config.meta_protocols.brc20, &config.brc20_db) {
-                with_pg_transaction(&brc20_db.to_conn_config(), ctx, |bclient| async move {
-                    Ok(brc20_pg::augment_block_with_operations(block, bclient).await?)
-                })
-                .await?;
-            }
+        // BRC-20
+        if let (true, Some(brc20_pool)) = (config.meta_protocols.brc20, &pg_pools.brc20) {
+            with_pg_transaction(brc20_pool, |bclient| async move {
+                Ok(brc20_pg::augment_block_with_operations(block, bclient).await?)
+            })
+            .await?;
+        }
 
-            Ok(())
-        },
-    )
+        Ok(())
+    })
     .await?;
     Ok(())
 }

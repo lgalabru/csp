@@ -16,10 +16,13 @@ use crate::{
     try_error, try_info,
 };
 
+use super::PgConnectionPools;
+
 pub fn start_bitcoin_scan_runloop(
     config: &Config,
     bitcoin_scan_op_rx: crossbeam_channel::Receiver<BitcoinChainhookSpecification>,
     observer_command_tx: Sender<ObserverCommand>,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) {
     try_info!(ctx, "Starting bitcoin scan runloop");
@@ -27,12 +30,14 @@ pub fn start_bitcoin_scan_runloop(
     while let Ok(predicate_spec) = bitcoin_scan_op_rx.recv() {
         let moved_ctx = ctx.clone();
         let moved_config = config.clone();
+        let moved_pg_pools = pg_pools.clone();
         let observer_command_tx = observer_command_tx.clone();
         bitcoin_scan_pool.execute(move || {
             let op = scan_bitcoin_chainstate_via_rpc_using_predicate(
                 &predicate_spec,
                 &moved_config,
                 None,
+                &moved_pg_pools,
                 &moved_ctx,
             );
 

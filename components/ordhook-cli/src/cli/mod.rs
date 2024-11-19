@@ -19,7 +19,7 @@ use ordhook::db::blocks::{
     open_blocks_db_with_retry, open_readonly_blocks_db,
 };
 use ordhook::db::cursor::BlockBytesCursor;
-use ordhook::db::{migrate_dbs, ordinals_pg};
+use ordhook::db::migrate_dbs;
 use ordhook::service::Service;
 use ordhook::try_info;
 use std::collections::HashSet;
@@ -181,9 +181,6 @@ struct StartCommand {
     /// Specify relative path of the chainhooks (yaml format) to evaluate
     #[clap(long = "post-to")]
     pub post_to: Vec<String>,
-    /// Block height where ordhook will start posting Ordinals activities
-    #[clap(long = "start-at-block")]
-    pub start_at_block: Option<u64>,
     /// HTTP Auth token
     #[clap(long = "auth-token")]
     pub auth_token: Option<String>,
@@ -212,87 +209,6 @@ enum OrdhookDbCommand {
     /// Db maintenance related commands
     #[clap(subcommand)]
     Repair(RepairCommand),
-}
-
-#[derive(Subcommand, PartialEq, Clone, Debug)]
-enum TestCommand {
-    /// Compute ordinal number of the 1st satoshi of the 1st input of a given transaction
-    #[clap(name = "inscriptions", bin_name = "inscriptions")]
-    Inscriptions(ScanInscriptionsCommand),
-}
-
-#[derive(Parser, PartialEq, Clone, Debug)]
-struct ScanInscriptionsCommand {
-    /// Block height
-    pub block_height: u64,
-    /// Txid
-    pub txid: Option<String>,
-    /// Target Regtest network
-    #[clap(
-        long = "regtest",
-        conflicts_with = "testnet",
-        conflicts_with = "mainnet"
-    )]
-    pub regtest: bool,
-    /// Target Testnet network
-    #[clap(
-        long = "testnet",
-        conflicts_with = "regtest",
-        conflicts_with = "mainnet"
-    )]
-    pub testnet: bool,
-    /// Target Mainnet network
-    #[clap(
-        long = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub mainnet: bool,
-    /// Load config file path
-    #[clap(
-        long = "config-path",
-        conflicts_with = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub config_path: Option<String>,
-}
-
-#[derive(Parser, PartialEq, Clone, Debug)]
-struct ScanTransfersCommand {
-    /// Inscription ID
-    pub inscription_id: String,
-    /// Block height
-    pub block_height: Option<u64>,
-    /// Target Regtest network
-    #[clap(
-        long = "regtest",
-        conflicts_with = "testnet",
-        conflicts_with = "mainnet"
-    )]
-    pub regtest: bool,
-    /// Target Testnet network
-    #[clap(
-        long = "testnet",
-        conflicts_with = "regtest",
-        conflicts_with = "mainnet"
-    )]
-    pub testnet: bool,
-    /// Target Mainnet network
-    #[clap(
-        long = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub mainnet: bool,
-    /// Load config file path
-    #[clap(
-        long = "config-path",
-        conflicts_with = "mainnet",
-        conflicts_with = "testnet",
-        conflicts_with = "regtest"
-    )]
-    pub config_path: Option<String>,
 }
 
 #[derive(Parser, PartialEq, Clone, Debug)]
@@ -396,20 +312,8 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 migrate_dbs(&config, ctx).await?;
 
                 // Figure out index start block height.
-                let chain_tip = {
-                    let mut pg_client = ordhook::db::pg_connect(&config.ordinals_db, ctx).await;
-                    ordinals_pg::get_chain_tip_block_height(&mut pg_client).await?
-                };
-                if chain_tip.is_none() {
-                    open_blocks_db_with_retry(true, &config, ctx);
-                }
-                let start_block = match cmd.start_at_block {
-                    Some(entry) => entry,
-                    None => match chain_tip {
-                        Some(entry) => entry,
-                        None => first_inscription_height(&config),
-                    },
-                };
+                let mut service = Service::new(&config, ctx);
+                let start_block = service.get_start_block_height().await?;
                 try_info!(
                     ctx,
                     "Inscription ingestion will start at block #{start_block}"
@@ -428,7 +332,6 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                     predicates.push(predicate);
                 }
 
-                let mut service = Service::new(config, ctx.clone());
                 return service
                     .run(
                         predicates,
@@ -463,7 +366,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
         Command::Db(OrdhookDbCommand::Sync(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             migrate_dbs(&config, ctx).await?;
-            let service = Service::new(config, ctx.clone());
+            let service = Service::new(&config, ctx);
             service.catch_up_to_bitcoin_chain_tip(None).await?;
         }
         Command::Db(OrdhookDbCommand::Repair(subcmd)) => match subcmd {

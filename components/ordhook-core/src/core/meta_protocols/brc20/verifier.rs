@@ -1,4 +1,4 @@
-use chainhook_postgres::tokio_postgres::Transaction;
+use chainhook_postgres::deadpool_postgres::Transaction;
 use chainhook_sdk::types::{
     BitcoinNetwork, BlockIdentifier, OrdinalInscriptionRevealData, OrdinalInscriptionTransferData,
     OrdinalInscriptionTransferDestination,

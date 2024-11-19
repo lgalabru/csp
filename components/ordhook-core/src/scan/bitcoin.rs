@@ -5,12 +5,12 @@ use crate::core::protocol::inscription_parsing::{
 };
 use crate::core::protocol::inscription_sequencing::augment_block_with_pre_computed_ordinals_data;
 use crate::db::ordinals_pg;
-use crate::download::download_archive_datasets_if_required;
 use crate::service::observers::{
     open_readwrite_observers_db_conn_or_panic, update_observer_progress,
 };
+use crate::service::PgConnectionPools;
 use crate::utils::bitcoind::bitcoind_get_block_height;
-use chainhook_postgres::with_pg_connection;
+use chainhook_postgres::with_pg_client;
 use chainhook_sdk::chainhooks::bitcoin::{
     evaluate_bitcoin_chainhooks_on_chain_event, handle_bitcoin_hook_action,
     BitcoinChainhookOccurrence, BitcoinTriggerChainhook,
@@ -30,9 +30,9 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
     predicate_spec: &BitcoinChainhookSpecification,
     config: &Config,
     event_observer_config_override: Option<&EventObserverConfig>,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<(), String> {
-    download_archive_datasets_if_required(config, ctx).await;
     let mut floating_end_block = false;
 
     let block_heights_to_scan_res = if let Some(ref blocks) = predicate_spec.blocks {
@@ -75,16 +75,9 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
 
     while let Some(current_block_height) = block_heights_to_scan.pop_front() {
         number_of_blocks_scanned += 1;
-        let has_activity = with_pg_connection(
-            &config.ordinals_db.to_conn_config(),
-            ctx,
-            |client| async move {
-                Ok(
-                    ordinals_pg::has_ordinal_activity_at_block(&client, current_block_height)
-                        .await?,
-                )
-            },
-        )
+        let has_activity = with_pg_client(&pg_pools.ordinals, |client| async move {
+            Ok(ordinals_pg::has_ordinal_activity_at_block(&client, current_block_height).await?)
+        })
         .await?;
         if !has_activity {
             continue;
@@ -117,7 +110,7 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
         };
 
         // 2: Augment the block with ordinal data we've already indexed in the past.
-        augment_block_with_pre_computed_ordinals_data(&mut block, &config, &ctx).await?;
+        augment_block_with_pre_computed_ordinals_data(&mut block, &config, pg_pools, &ctx).await?;
         let inscriptions_revealed = get_inscriptions_revealed_in_block(&block)
             .iter()
             .map(|d| d.get_inscription_number().to_string())

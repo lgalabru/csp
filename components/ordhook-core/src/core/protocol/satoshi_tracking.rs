@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use chainhook_postgres::tokio_postgres::Transaction;
+use chainhook_postgres::deadpool_postgres::Transaction;
 use chainhook_sdk::{
     bitcoincore_rpc_json::bitcoin::{Address, Network, ScriptBuf},
     types::{

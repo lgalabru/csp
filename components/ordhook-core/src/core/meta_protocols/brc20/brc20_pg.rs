@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use chainhook_postgres::{
-    tokio_postgres::{types::ToSql, Client, GenericClient},
-    types::{PgNumericU128, PgNumericU64},
-    utils,
+    deadpool_postgres::GenericClient, tokio_postgres::{types::ToSql, Client}, types::{PgNumericU128, PgNumericU64}, utils
 };
 use chainhook_sdk::types::{
     BitcoinBlockData, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData, Brc20TransferData,

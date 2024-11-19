@@ -18,7 +18,10 @@ use std::hash::BuildHasherDefault;
 
 use crate::{
     core::{
-        meta_protocols::brc20::{cache::{brc20_new_cache, Brc20MemoryCache}, index::index_block_and_insert_brc20_operations},
+        meta_protocols::brc20::{
+            cache::{brc20_new_cache, Brc20MemoryCache},
+            index::index_block_and_insert_brc20_operations,
+        },
         pipeline::processors::block_archiving::store_compacted_blocks,
         protocol::{
             inscription_parsing::{
@@ -34,6 +37,7 @@ use crate::{
         },
     },
     db::{blocks::open_blocks_db_with_retry, cursor::TransactionBytesCursor, ordinals_pg},
+    service::PgConnectionPools,
     try_error, try_info,
     utils::monitoring::PrometheusMonitoring,
 };
@@ -48,6 +52,7 @@ use crate::{
 
 pub fn start_inscription_indexing_processor(
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
     post_processor: Option<Sender<BitcoinBlockData>>,
     prometheus: &PrometheusMonitoring,
@@ -57,6 +62,7 @@ pub fn start_inscription_indexing_processor(
 
     let config = config.clone();
     let ctx = ctx.clone();
+    let pg_pools = pg_pools.clone();
     let prometheus = prometheus.clone();
     let handle: JoinHandle<()> = hiro_system_kit::thread_named("Inscription indexing runloop")
         .spawn(move || {
@@ -121,6 +127,7 @@ pub fn start_inscription_indexing_processor(
                         &post_processor,
                         &prometheus,
                         &config,
+                        &pg_pools,
                         &ctx,
                     )
                     .await
@@ -161,6 +168,7 @@ pub async fn process_blocks(
     post_processor: &Option<Sender<BitcoinBlockData>>,
     prometheus: &PrometheusMonitoring,
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<Vec<BitcoinBlockData>, String> {
     let mut cache_l1 = BTreeMap::new();
@@ -185,6 +193,7 @@ pub async fn process_blocks(
             brc20_cache.as_mut(),
             prometheus,
             config,
+            pg_pools,
             ctx,
         )
         .await?;
@@ -221,10 +230,11 @@ pub async fn process_block(
     brc20_cache: Option<&mut Brc20MemoryCache>,
     prometheus: &PrometheusMonitoring,
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<(), String> {
     let block_height = block.block_identifier.index;
-    with_pg_transaction(&config.ordinals_db.to_conn_config(), ctx, |tx| async move {
+    with_pg_transaction(&pg_pools.ordinals, |tx| async move {
         // Parsed BRC20 ops will be deposited here for this block.
         let mut brc20_operation_map = HashMap::new();
         parse_inscriptions_in_standardized_block(block, &mut brc20_operation_map, config, &ctx);
@@ -252,8 +262,8 @@ pub async fn process_block(
         ordinals_pg::insert_block(block, tx).await?;
 
         // BRC-20
-        if let (Some(brc20_cache), Some(brc20_db)) = (brc20_cache, config.brc20_db.as_ref()) {
-            with_pg_transaction(&brc20_db.to_conn_config(), ctx, |brc20_tx| async move {
+        if let (Some(brc20_cache), Some(brc20_pool)) = (brc20_cache, &pg_pools.brc20) {
+            with_pg_transaction(&brc20_pool, |brc20_tx| async move {
                 index_block_and_insert_brc20_operations(
                     block,
                     &mut brc20_operation_map,

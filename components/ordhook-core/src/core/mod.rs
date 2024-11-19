@@ -4,7 +4,7 @@ pub mod protocol;
 #[cfg(test)]
 pub mod test_builders;
 
-use chainhook_postgres::{pg_connect, with_pg_connection};
+use chainhook_postgres::with_pg_client;
 use dashmap::DashMap;
 use fxhash::{FxBuildHasher, FxHasher};
 use std::hash::BuildHasherDefault;
@@ -20,8 +20,9 @@ use crate::{
             open_blocks_db_with_retry,
         },
         cursor::TransactionBytesCursor,
-        ordinals_pg::{self, get_chain_tip_block_height},
+        ordinals_pg,
     },
+    service::PgConnectionPools,
     utils::bitcoind::bitcoind_get_block_height,
 };
 
@@ -118,15 +119,14 @@ pub fn compute_next_satpoint_data(
 
 pub async fn should_sync_rocks_db(
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<Option<(u64, u64)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let last_compressed_block = find_last_block_inserted(&blocks_db) as u64;
-    let last_indexed_block = match with_pg_connection(
-        &config.ordinals_db.to_conn_config(),
-        ctx,
-        |client| async move { Ok(ordinals_pg::get_chain_tip_block_height(&client).await?) },
-    )
+    let last_indexed_block = match with_pg_client(&pg_pools.ordinals, |client| async move {
+        Ok(ordinals_pg::get_chain_tip_block_height(&client).await?)
+    })
     .await?
     {
         Some(last_indexed_block) => last_indexed_block,
@@ -143,13 +143,17 @@ pub async fn should_sync_rocks_db(
 
 pub async fn should_sync_ordinals_db(
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<Option<(u64, u64, usize)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let mut start_block = find_last_block_inserted(&blocks_db) as u64;
 
-    let pg_client = pg_connect(&config.ordinals_db.to_conn_config(), ctx).await?;
-    match get_chain_tip_block_height(&pg_client).await? {
+    match with_pg_client(&pg_pools.ordinals, |client| async move {
+        Ok(ordinals_pg::get_chain_tip_block_height(&client).await?)
+    })
+    .await?
+    {
         Some(height) => {
             if find_pinned_block_bytes_at_block_height(height as u32, 3, &blocks_db, &ctx).is_none()
             {

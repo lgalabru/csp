@@ -4,9 +4,11 @@ pub mod utils;
 use std::future::Future;
 
 use chainhook_sdk::utils::Context;
+use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod, Transaction};
 pub use tokio_postgres;
+pub use deadpool_postgres;
 
-use tokio_postgres::{Client, Config, NoTls, Transaction};
+use tokio_postgres::{Client, Config, NoTls};
 
 pub struct PgConnectionConfig {
     pub dbname: String,
@@ -16,35 +18,55 @@ pub struct PgConnectionConfig {
     pub password: Option<String>,
 }
 
+pub fn pg_connection_pool(config: &PgConnectionConfig) -> Result<Pool, String> {
+    let mut pg_config = Config::new();
+    pg_config
+        .dbname(&config.dbname)
+        .host(&config.host)
+        .port(config.port)
+        .user(&config.user);
+    if let Some(password) = &config.password {
+        pg_config.password(password);
+    }
+    let manager = Manager::from_config(
+        pg_config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    Ok(Pool::builder(manager)
+        .max_size(16)
+        .build()
+        .map_err(|e| format!("unable to build pg connection pool: {e}"))?)
+}
+
 /// Creates a short-lived connection and passes it into the given closure. Use this when you want to make sure the connection gets
 /// closed once your work is complete.
-pub async fn with_pg_connection<F, Fut, T>(
-    config: &PgConnectionConfig,
-    ctx: &Context,
-    f: F,
-) -> Result<T, String>
+pub async fn with_pg_client<F, Fut, T>(pool: &Pool, f: F) -> Result<T, String>
 where
-    F: FnOnce(Client) -> Fut,
+    F: FnOnce(Object) -> Fut,
     Fut: Future<Output = Result<T, String>>,
 {
-    let client = pg_connect(config, ctx).await?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|e| format!("unable to get pg client: {e}"))?;
     let result = f(client).await?;
     Ok(result)
 }
 
 /// Creates a new connection, opens a transaction, and passes it into the given closure. Use this when you want to run queries
 /// within the confines of a single well defined transaction.
-pub async fn with_pg_transaction<'a, F, Fut, T>(
-    config: &PgConnectionConfig,
-    ctx: &Context,
-    f: F,
-) -> Result<T, String>
+pub async fn with_pg_transaction<'a, F, Fut, T>(pool: &Pool, f: F) -> Result<T, String>
 where
     F: FnOnce(&'a Transaction<'a>) -> Fut,
     Fut: Future<Output = Result<T, String>> + 'a,
 {
-    // TODO(rafaelcr): Find a way to reuse this connection across transactions
-    let mut client = pg_connect(config, ctx).await?;
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|e| format!("unable to get pg client: {e}"))?;
     let transaction = client
         .transaction()
         .await

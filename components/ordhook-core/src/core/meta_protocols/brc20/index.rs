@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chainhook_postgres::tokio_postgres::Transaction;
+use chainhook_postgres::deadpool_postgres::Transaction;
 use chainhook_sdk::{
     types::{
         BitcoinBlockData, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData,

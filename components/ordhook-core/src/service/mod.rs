@@ -28,7 +28,8 @@ use crate::service::runloops::start_bitcoin_scan_runloop;
 use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_error, try_info};
-use chainhook_postgres::{with_pg_connection, with_pg_transaction};
+use chainhook_postgres::deadpool_postgres::Pool;
+use chainhook_postgres::{pg_connection_pool, with_pg_client, with_pg_transaction};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
 use chainhook_sdk::chainhooks::types::{
     BitcoinChainhookSpecification, ChainhookConfig, ChainhookFullSpecification,
@@ -51,19 +52,48 @@ use std::hash::BuildHasherDefault;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
+pub struct PgConnectionPools {
+    pub ordinals: Pool,
+    pub brc20: Option<Pool>,
+}
+
 pub struct Service {
     pub prometheus: PrometheusMonitoring,
     pub config: Config,
     pub ctx: Context,
+    pub pg_pools: PgConnectionPools,
 }
 
 impl Service {
-    pub fn new(config: Config, ctx: Context) -> Self {
+    pub fn new(config: &Config, ctx: &Context) -> Self {
         Self {
             prometheus: PrometheusMonitoring::new(),
-            config,
-            ctx,
+            config: config.clone(),
+            ctx: ctx.clone(),
+            pg_pools: PgConnectionPools {
+                ordinals: pg_connection_pool(&config.ordinals_db.to_conn_config()).unwrap(),
+                brc20: match (config.meta_protocols.brc20, &config.brc20_db) {
+                    (true, Some(brc20_db)) => {
+                        Some(pg_connection_pool(&brc20_db.to_conn_config()).unwrap())
+                    }
+                    _ => None,
+                },
+            },
         }
+    }
+
+    /// Returns at which block height we should start indexing.
+    pub async fn get_start_block_height(&self) -> Result<u64, String> {
+        Ok(with_pg_client(&self.pg_pools.ordinals, |client| async move {
+            Ok(match ordinals_pg::get_chain_tip_block_height(&client).await? {
+                Some(block_height) => block_height,
+                None => {
+                    open_blocks_db_with_retry(true, &self.config, &self.ctx);
+                    first_inscription_height(&self.config)
+                },
+            })
+        }).await?)
     }
 
     pub async fn run(
@@ -87,20 +117,17 @@ impl Service {
                 ));
             });
         }
-        let (max_inscription_number, chain_tip) = with_pg_transaction(
-            &self.config.ordinals_db.to_conn_config(),
-            &self.ctx,
-            |pg_tx| async move {
-                let inscription_number = ordinals_pg::get_highest_inscription_number(pg_tx)
+        let (max_inscription_number, chain_tip) =
+            with_pg_transaction(&self.pg_pools.ordinals, |client| async move {
+                let inscription_number = ordinals_pg::get_highest_inscription_number(client)
                     .await?
                     .unwrap_or(0);
-                let chain_tip = ordinals_pg::get_chain_tip_block_height(pg_tx)
+                let chain_tip = ordinals_pg::get_chain_tip_block_height(client)
                     .await?
                     .unwrap_or(0);
                 Ok((inscription_number, chain_tip))
-            },
-        )
-        .await?;
+            })
+            .await?;
         self.prometheus
             .initialize(0, max_inscription_number as u64, chain_tip);
 
@@ -140,15 +167,11 @@ impl Service {
         // Observers handling
         // 1) update event_observer_config with observers ready to be used
         // 2) catch-up outdated observers by dispatching replays
-        let chain_tip = with_pg_connection(
-            &self.config.ordinals_db.to_conn_config(),
-            &self.ctx,
-            |mut client| async move {
-                Ok(ordinals_pg::get_chain_tip_block_height(&mut client)
-                    .await?
-                    .unwrap_or(0))
-            },
-        )
+        let chain_tip = with_pg_client(&self.pg_pools.ordinals, |client| async move {
+            Ok(ordinals_pg::get_chain_tip_block_height(&client)
+                .await?
+                .unwrap_or(0))
+        })
         .await?;
         let (chainhook_config, outdated_observers) =
             create_and_consolidate_chainhook_config_with_predicates(
@@ -199,6 +222,7 @@ impl Service {
         let (bitcoin_scan_op_tx, bitcoin_scan_op_rx) = crossbeam_channel::unbounded();
         let ctx = self.ctx.clone();
         let config = self.config.clone();
+        let pg_pools = self.pg_pools.clone();
         let observer_command_tx_moved = observer_command_tx.clone();
         let _ = hiro_system_kit::thread_named("Bitcoin scan runloop")
             .spawn(move || {
@@ -206,6 +230,7 @@ impl Service {
                     &config,
                     bitcoin_scan_op_rx,
                     observer_command_tx_moved,
+                    &pg_pools,
                     &ctx,
                 );
             })
@@ -263,6 +288,7 @@ impl Service {
         let mut brc20_cache = brc20_new_cache(&self.config);
         let ctx = self.ctx.clone();
         let config = self.config.clone();
+        let pg_pools = self.pg_pools.clone();
         let prometheus = self.prometheus.clone();
 
         hiro_system_kit::thread_named("Observer Sidecar Runloop")
@@ -280,6 +306,7 @@ impl Service {
                                         &mut brc20_cache,
                                         &prometheus,
                                         &config,
+                                        &pg_pools,
                                         &ctx,
                                     ).await {
                                         Ok(_) => {
@@ -310,11 +337,9 @@ impl Service {
         let (tip, missing_blocks) = {
             let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
 
-            let tip = with_pg_connection(
-                &self.config.ordinals_db.to_conn_config(),
-                &self.ctx,
-                |client| async move { Ok(ordinals_pg::get_chain_tip_block_height(&client).await?) },
-            )
+            let tip = with_pg_client(&self.pg_pools.ordinals, |client| async move {
+                Ok(ordinals_pg::get_chain_tip_block_height(&client).await?)
+            })
             .await?
             .unwrap_or(0);
             let missing_blocks = find_missing_blocks(&blocks_db, 0, tip as u32, &self.ctx);
@@ -354,7 +379,7 @@ impl Service {
 
         // 1: Catch up blocks DB so it is at least at the same height as the ordinals DB.
         if let Some((start_block, end_block)) =
-            should_sync_rocks_db(&self.config, &self.ctx).await?
+            should_sync_rocks_db(&self.config, &self.pg_pools, &self.ctx).await?
         {
             let blocks_post_processor = start_block_archiving_processor(
                 &self.config,
@@ -384,13 +409,14 @@ impl Service {
         // enabled.
         let mut last_block_processed = 0;
         while let Some((start_block, end_block, speed)) =
-            should_sync_ordinals_db(&self.config, &self.ctx).await?
+            should_sync_ordinals_db(&self.config, &self.pg_pools, &self.ctx).await?
         {
             if last_block_processed == end_block {
                 break;
             }
             let blocks_post_processor = start_inscription_indexing_processor(
                 &self.config,
+                &self.pg_pools,
                 &self.ctx,
                 block_post_processor.clone(),
                 &self.prometheus,
@@ -461,6 +487,7 @@ pub async fn chainhook_sidecar_mutate_blocks(
     brc20_cache: &mut Option<Brc20MemoryCache>,
     prometheus: &PrometheusMonitoring,
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<(), String> {
     let blocks_db_rw = open_blocks_db_with_retry(true, &config, ctx);
@@ -521,6 +548,7 @@ pub async fn chainhook_sidecar_mutate_blocks(
                 brc20_cache.as_mut(),
                 prometheus,
                 &config,
+                pg_pools,
                 &ctx,
             )
             .await?;
