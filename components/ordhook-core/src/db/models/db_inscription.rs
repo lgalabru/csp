@@ -42,7 +42,7 @@ impl DbInscription {
             number: reveal.inscription_number.jubilee,
             classic_number: reveal.inscription_number.classic,
             block_height: PgNumericU64(block_identifier.index),
-            block_hash: block_identifier.hash.clone(),
+            block_hash: block_identifier.hash[2..].to_string(),
             tx_index: PgBigIntU32(tx_index as u32),
             address: reveal.inscriber_address.clone(),
             mime_type: reveal.content_type.split(';').nth(0).unwrap().to_string(),

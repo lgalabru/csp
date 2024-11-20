@@ -11,7 +11,7 @@ CREATE TABLE operations (
     tx_index NUMERIC NOT NULL,
     output TEXT NOT NULL,
     "offset" NUMERIC NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL,
+    timestamp BIGINT NOT NULL,
     address TEXT NOT NULL,
     to_address TEXT,
     amount NUMERIC NOT NULL

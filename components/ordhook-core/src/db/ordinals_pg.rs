@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use chainhook_postgres::{
-    deadpool_postgres::GenericClient, tokio_postgres::{types::ToSql, Client}, types::{PgBigIntU32, PgNumericU64}, utils
+    deadpool_postgres::GenericClient,
+    tokio_postgres::{types::ToSql, Client},
+    types::{PgBigIntU32, PgNumericU64},
+    utils,
 };
 use chainhook_sdk::types::{
     bitcoin::TxIn, BitcoinBlockData, OrdinalInscriptionNumber, OrdinalOperation,
@@ -9,7 +12,10 @@ use chainhook_sdk::types::{
 };
 use refinery::embed_migrations;
 
-use crate::{core::protocol::{satoshi_numbering::TraversalResult, satoshi_tracking::WatchedSatpoint}, utils::format_outpoint_to_watch};
+use crate::{
+    core::protocol::{satoshi_numbering::TraversalResult, satoshi_tracking::WatchedSatpoint},
+    utils::format_outpoint_to_watch,
+};
 
 use super::models::{
     DbCurrentLocation, DbInscription, DbInscriptionRecursion, DbLocation, DbSatoshi,
@@ -312,8 +318,8 @@ async fn insert_locations<T: GenericClient>(
             .query(
                 &format!(
                     "WITH location_inserts AS (
-                        INSERT INTO locations (ordinal_number, block_height, tx_index, tx_id, block_hash, address, output, offset
-                            prev_output, prev_offset, value, transfer_type, timestamp)
+                        INSERT INTO locations (ordinal_number, block_height, tx_index, tx_id, block_hash, address, output,
+                            \"offset\", prev_output, prev_offset, value, transfer_type, timestamp)
                         VALUES {}
                         ON CONFLICT (ordinal_number, block_height, tx_index) DO NOTHING
                         RETURNING ordinal_number, block_height, block_hash, tx_index
@@ -325,7 +331,7 @@ async fn insert_locations<T: GenericClient>(
                     ),
                     moved_inscriptions AS (
                         SELECT
-                        i.genesis_id, i.number, i.ordinal_number, li.block_height, li.block_hash, li.tx_index,
+                        i.inscription_id, i.number, i.ordinal_number, li.block_height, li.block_hash, li.tx_index,
                         (
                             ROW_NUMBER() OVER (ORDER BY li.block_height ASC, li.tx_index ASC) + (SELECT COALESCE(max, -1) FROM prev_transfer_index)
                         ) AS block_transfer_index
@@ -334,7 +340,7 @@ async fn insert_locations<T: GenericClient>(
                         WHERE i.block_height < li.block_height OR (i.block_height = li.block_height AND i.tx_index < li.tx_index)
                     )
                     INSERT INTO inscription_transfers
-                        (genesis_id, number, ordinal_number, block_height, block_hash, tx_index, block_transfer_index)
+                        (inscription_id, number, ordinal_number, block_height, block_hash, tx_index, block_transfer_index)
                         (SELECT * FROM moved_inscriptions)
                         ON CONFLICT (block_height, block_transfer_index) DO NOTHING",
                     utils::multi_row_query_param_str(chunk.len(), 13)
@@ -392,16 +398,16 @@ async fn insert_current_locations<T: GenericClient>(
                 "WITH prev_owners AS (
                     SELECT address, COUNT(*) AS count
                     FROM current_locations
-                    WHERE ordinal_number IN $1
+                    WHERE ordinal_number = ANY ($1)
                     GROUP BY address
                 )
-                UPDATE counts_by_address AS c
-                SET c.count = (
-                    SELECT c.count - p.count
+                UPDATE counts_by_address
+                SET count = (
+                    SELECT counts_by_address.count - p.count
                     FROM prev_owners AS p
-                    WHERE p.address = c.address
+                    WHERE p.address = counts_by_address.address
                 )
-                WHERE EXISTS (SELECT 1 FROM prev_owners AS p WHERE p.address = c.address)",
+                WHERE EXISTS (SELECT 1 FROM prev_owners AS p WHERE p.address = counts_by_address.address)",
                 &[&c],
             )
             .await
@@ -422,7 +428,7 @@ async fn insert_current_locations<T: GenericClient>(
         client
             .query(
                 &format!(
-                    "INSERT INTO current_locations (ordinal_number, block_height, tx_id, tx_index, address, output, offset)
+                    "INSERT INTO current_locations (ordinal_number, block_height, tx_id, tx_index, address, output, \"offset\")
                     VALUES {}
                     ON CONFLICT (ordinal_number) DO UPDATE SET
                         block_height = EXCLUDED.block_height,
@@ -447,7 +453,7 @@ async fn insert_current_locations<T: GenericClient>(
                 "WITH new_owners AS (
                     SELECT address, COUNT(*) AS count
                     FROM current_locations
-                    WHERE ordinal_number IN $1
+                    WHERE ordinal_number = ANY ($1)
                     GROUP BY address
                 )
                 INSERT INTO counts_by_address (address, count)
@@ -458,6 +464,17 @@ async fn insert_current_locations<T: GenericClient>(
             .await
             .map_err(|e| format!("insert_current_locations: {e}"))?;
     }
+    Ok(())
+}
+
+pub async fn update_chain_tip<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
+    client
+        .query(
+            "UPDATE chain_tip SET block_height = $1",
+            &[&PgNumericU64(block_height)],
+        )
+        .await
+        .map_err(|e| format!("update_chain_tip: {e}"))?;
     Ok(())
 }
 
@@ -548,5 +565,7 @@ pub async fn insert_block<T: GenericClient>(
     insert_locations(&locations, client).await?;
     insert_satoshis(&satoshis, client).await?;
     insert_current_locations(&current_locations, client).await?;
+    update_chain_tip(block.block_identifier.index, client).await?;
+
     Ok(())
 }

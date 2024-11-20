@@ -1,4 +1,3 @@
-CREATE TYPE transfer_type AS ENUM ('transferred', 'spent_in_fees', 'burnt');
 CREATE TABLE locations (
     ordinal_number NUMERIC NOT NULL,
     block_height NUMERIC NOT NULL,
@@ -11,8 +10,8 @@ CREATE TABLE locations (
     prev_output TEXT,
     prev_offset NUMERIC,
     value NUMERIC,
-    transfer_type transfer_type NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL
+    transfer_type TEXT NOT NULL,
+    timestamp BIGINT NOT NULL
 );
 ALTER TABLE locations ADD PRIMARY KEY (ordinal_number, block_height, tx_index);
 CREATE INDEX locations_output_offset_index ON locations (output, "offset");

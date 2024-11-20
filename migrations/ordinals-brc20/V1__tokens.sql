@@ -15,7 +15,7 @@ CREATE TABLE tokens (
     minted_supply NUMERIC DEFAULT 0,
     burned_supply NUMERIC DEFAULT 0,
     tx_count BIGINT DEFAULT 0,
-    timestamp TIMESTAMPTZ NOT NULL
+    timestamp BIGINT NOT NULL
 );
 CREATE INDEX tokens_inscription_id_index ON tokens (inscription_id);
 CREATE INDEX tokens_block_height_tx_index_index ON tokens (block_height DESC, tx_index DESC);

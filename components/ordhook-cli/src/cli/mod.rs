@@ -311,8 +311,9 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
 
                 migrate_dbs(&config, ctx).await?;
 
-                // Figure out index start block height.
                 let mut service = Service::new(&config, ctx);
+                // TODO(rafaelcr): This only works if there's a rocksdb file already containing blocks previous to the first
+                // inscription height.
                 let start_block = service.get_start_block_height().await?;
                 try_info!(
                     ctx,

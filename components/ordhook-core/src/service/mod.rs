@@ -83,17 +83,20 @@ impl Service {
         }
     }
 
-    /// Returns at which block height we should start indexing.
+    /// Returns at which block height we should start indexing. This only looks at the max index chain tip, not at the blocks DB
+    /// chain tip.
     pub async fn get_start_block_height(&self) -> Result<u64, String> {
-        Ok(with_pg_client(&self.pg_pools.ordinals, |client| async move {
-            Ok(match ordinals_pg::get_chain_tip_block_height(&client).await? {
-                Some(block_height) => block_height,
-                None => {
-                    open_blocks_db_with_retry(true, &self.config, &self.ctx);
-                    first_inscription_height(&self.config)
-                },
-            })
-        }).await?)
+        let chain_tip = with_pg_transaction(&self.pg_pools.ordinals, |client| async move {
+            // Update chain tip to match first inscription height at least.
+            let db_height = ordinals_pg::get_chain_tip_block_height(client)
+                .await?
+                .unwrap_or(0)
+                .max(first_inscription_height(&self.config) - 1);
+            ordinals_pg::update_chain_tip(db_height, client).await?;
+            Ok(db_height)
+        })
+        .await?;
+        Ok(chain_tip)
     }
 
     pub async fn run(
