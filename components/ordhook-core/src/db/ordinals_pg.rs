@@ -467,7 +467,165 @@ async fn insert_current_locations<T: GenericClient>(
     Ok(())
 }
 
-pub async fn update_chain_tip<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
+async fn update_mime_type_counts<T: GenericClient>(
+    counts: &HashMap<String, i32>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (key, value) in counts {
+        params.push(key);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "INSERT INTO counts_by_mime_type (mime_type, count) VALUES {}
+                ON CONFLICT (mime_type) DO UPDATE SET count = counts_by_mime_type.count + EXCLUDED.count",
+                utils::multi_row_query_param_str(counts.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_mime_type_counts: {e}"))?;
+    Ok(())
+}
+
+async fn update_sat_rarity_counts<T: GenericClient>(
+    counts: &HashMap<String, i32>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (key, value) in counts {
+        params.push(key);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "INSERT INTO counts_by_sat_rarity (rarity, count) VALUES {}
+                ON CONFLICT (rarity) DO UPDATE SET count = counts_by_sat_rarity.count + EXCLUDED.count",
+                utils::multi_row_query_param_str(counts.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_sat_rarity_counts: {e}"))?;
+    Ok(())
+}
+
+async fn update_inscription_type_counts<T: GenericClient>(
+    counts: &HashMap<String, i32>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (key, value) in counts {
+        params.push(key);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "INSERT INTO counts_by_type (type, count) VALUES {}
+                ON CONFLICT (type) DO UPDATE SET count = counts_by_type.count + EXCLUDED.count",
+                utils::multi_row_query_param_str(counts.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_inscription_type_counts: {e}"))?;
+    Ok(())
+}
+
+async fn update_genesis_address_counts<T: GenericClient>(
+    counts: &HashMap<String, i32>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (key, value) in counts {
+        params.push(key);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "INSERT INTO counts_by_genesis_address (address, count) VALUES {}
+                ON CONFLICT (address) DO UPDATE SET count = counts_by_genesis_address.count + EXCLUDED.count",
+                utils::multi_row_query_param_str(counts.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_genesis_address_counts: {e}"))?;
+    Ok(())
+}
+
+async fn update_recursive_counts<T: GenericClient>(
+    counts: &HashMap<bool, i32>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (key, value) in counts {
+        params.push(key);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "INSERT INTO counts_by_recursive (recursive, count) VALUES {}
+                ON CONFLICT (recursive) DO UPDATE SET count = counts_by_recursive.count + EXCLUDED.count",
+                utils::multi_row_query_param_str(counts.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_recursive_counts: {e}"))?;
+    Ok(())
+}
+
+async fn update_counts_by_block<T: GenericClient>(
+    block_height: u64,
+    block_hash: &String,
+    inscription_count: usize,
+    timestamp: u32,
+    client: &T,
+) -> Result<(), String> {
+    client
+        .query(
+        "WITH prev_entry AS (
+                SELECT inscription_count_accum
+                FROM counts_by_block
+                WHERE block_height < $1
+                ORDER BY block_height DESC
+                LIMIT 1
+            )
+            INSERT INTO counts_by_block (block_height, block_hash, inscription_count, inscription_count_accum, timestamp)
+            VALUES ($1, $2, $3, COALESCE((SELECT inscription_count_accum FROM prev_entry), 0) + $3, $4)",
+            &[&PgNumericU64(block_height), block_hash, &(inscription_count as i32), &PgBigIntU32(timestamp)],
+        )
+        .await
+        .map_err(|e| format!("update_counts_by_block: {e}"))?;
+    Ok(())
+}
+
+pub async fn update_chain_tip<T: GenericClient>(
+    block_height: u64,
+    client: &T,
+) -> Result<(), String> {
     client
         .query(
             "UPDATE chain_tip SET block_height = $1",
@@ -487,6 +645,11 @@ pub async fn insert_block<T: GenericClient>(
     let mut locations = vec![];
     let mut inscription_recursions = vec![];
     let mut current_locations: HashMap<PgNumericU64, DbCurrentLocation> = HashMap::new();
+    let mut mime_type_counts = HashMap::new();
+    let mut sat_rarity_counts = HashMap::new();
+    let mut inscription_type_counts = HashMap::new();
+    let mut genesis_address_counts = HashMap::new();
+    let mut recursive_counts = HashMap::new();
 
     let mut update_current_location =
         |ordinal_number: PgNumericU64, new_location: DbCurrentLocation| match current_locations
@@ -514,8 +677,11 @@ pub async fn insert_block<T: GenericClient>(
                         tx_index,
                         block.timestamp,
                     );
+                    let mime_type = inscription.mime_type.clone();
+                    let genesis_address = inscription.address.clone();
                     let recursions = DbInscriptionRecursion::from_reveal(reveal);
-                    if recursions.len() > 0 {
+                    let is_recursive = recursions.len() > 0;
+                    if is_recursive {
                         inscription.recursive = true;
                     }
                     inscription_recursions.extend(recursions);
@@ -527,7 +693,9 @@ pub async fn insert_block<T: GenericClient>(
                         tx_index,
                         block.timestamp,
                     ));
-                    satoshis.push(DbSatoshi::from_reveal(reveal));
+                    let satoshi = DbSatoshi::from_reveal(reveal);
+                    let rarity = satoshi.rarity.clone();
+                    satoshis.push(satoshi);
                     update_current_location(
                         PgNumericU64(reveal.ordinal_number),
                         DbCurrentLocation::from_reveal(
@@ -537,6 +705,33 @@ pub async fn insert_block<T: GenericClient>(
                             tx_index,
                         ),
                     );
+                    let inscription_type = if reveal.inscription_number.classic < 0 {
+                        "cursed".to_string()
+                    } else {
+                        "blessed".to_string()
+                    };
+                    mime_type_counts
+                        .entry(mime_type)
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
+                    sat_rarity_counts
+                        .entry(rarity)
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
+                    inscription_type_counts
+                        .entry(inscription_type)
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
+                    if let Some(genesis_address) = genesis_address {
+                        genesis_address_counts
+                            .entry(genesis_address)
+                            .and_modify(|c| *c += 1)
+                            .or_insert(1);
+                    }
+                    recursive_counts
+                        .entry(is_recursive)
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
                 }
                 OrdinalOperation::InscriptionTransferred(transfer) => {
                     locations.push(DbLocation::from_transfer(
@@ -565,6 +760,19 @@ pub async fn insert_block<T: GenericClient>(
     insert_locations(&locations, client).await?;
     insert_satoshis(&satoshis, client).await?;
     insert_current_locations(&current_locations, client).await?;
+    update_mime_type_counts(&mime_type_counts, client).await?;
+    update_sat_rarity_counts(&sat_rarity_counts, client).await?;
+    update_inscription_type_counts(&inscription_type_counts, client).await?;
+    update_genesis_address_counts(&genesis_address_counts, client).await?;
+    update_recursive_counts(&recursive_counts, client).await?;
+    update_counts_by_block(
+        block.block_identifier.index,
+        &block.block_identifier.hash,
+        inscriptions.len(),
+        block.timestamp,
+        client,
+    )
+    .await?;
     update_chain_tip(block.block_identifier.index, client).await?;
 
     Ok(())
