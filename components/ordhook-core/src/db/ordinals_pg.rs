@@ -330,18 +330,31 @@ async fn insert_locations<T: GenericClient>(
                         WHERE block_height = (SELECT block_height FROM location_inserts LIMIT 1)
                     ),
                     moved_inscriptions AS (
-                        SELECT
-                        i.inscription_id, i.number, i.ordinal_number, li.block_height, li.block_hash, li.tx_index,
-                        (
-                            ROW_NUMBER() OVER (ORDER BY li.block_height ASC, li.tx_index ASC) + (SELECT COALESCE(max, -1) FROM prev_transfer_index)
-                        ) AS block_transfer_index
+                        SELECT i.inscription_id, i.number, i.ordinal_number, li.block_height, li.tx_index,
+                            (
+                                SELECT l.block_height || ',' || l.tx_index
+                                FROM locations AS l
+                                WHERE l.ordinal_number = li.ordinal_number AND (
+                                    l.block_height < li.block_height OR
+                                    (l.block_height = li.block_height AND l.tx_index < li.tx_index)
+                                )
+                                ORDER BY l.block_height DESC, l.tx_index DESC
+                                LIMIT 1
+                            ) AS from_data,
+                            (ROW_NUMBER() OVER (ORDER BY li.block_height ASC, li.tx_index ASC) + (SELECT COALESCE(max, -1) FROM prev_transfer_index)) AS block_transfer_index
                         FROM inscriptions AS i
                         INNER JOIN location_inserts AS li ON li.ordinal_number = i.ordinal_number
                         WHERE i.block_height < li.block_height OR (i.block_height = li.block_height AND i.tx_index < li.tx_index)
                     )
                     INSERT INTO inscription_transfers
-                        (inscription_id, number, ordinal_number, block_height, block_hash, tx_index, block_transfer_index)
-                        (SELECT * FROM moved_inscriptions)
+                        (inscription_id, number, ordinal_number, block_height, tx_index, from_block_height, from_tx_index, block_transfer_index)
+                        (
+                            SELECT inscription_id, number, ordinal_number, block_height, tx_index,
+                                SPLIT_PART(from_data, ',', 1)::numeric AS from_block_height,
+                                SPLIT_PART(from_data, ',', 2)::bigint AS from_tx_index,
+                                block_transfer_index
+                            FROM moved_inscriptions
+                        )
                         ON CONFLICT (block_height, block_transfer_index) DO NOTHING",
                     utils::multi_row_query_param_str(chunk.len(), 13)
                 ),
@@ -604,6 +617,9 @@ async fn update_counts_by_block<T: GenericClient>(
     timestamp: u32,
     client: &T,
 ) -> Result<(), String> {
+    if inscription_count == 0 {
+        return Ok(());
+    }
     client
         .query(
         "WITH prev_entry AS (
@@ -767,7 +783,7 @@ pub async fn insert_block<T: GenericClient>(
     update_recursive_counts(&recursive_counts, client).await?;
     update_counts_by_block(
         block.block_identifier.index,
-        &block.block_identifier.hash,
+        &block.block_identifier.hash[2..].to_string(),
         inscriptions.len(),
         block.timestamp,
         client,
