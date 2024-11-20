@@ -29,7 +29,7 @@ use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_error, try_info};
 use chainhook_postgres::deadpool_postgres::Pool;
-use chainhook_postgres::{pg_connection_pool, with_pg_client, with_pg_transaction};
+use chainhook_postgres::{new_pg_connection_pool, with_pg_client, with_pg_transaction};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
 use chainhook_sdk::chainhooks::types::{
     BitcoinChainhookSpecification, ChainhookConfig, ChainhookFullSpecification,
@@ -72,10 +72,10 @@ impl Service {
             config: config.clone(),
             ctx: ctx.clone(),
             pg_pools: PgConnectionPools {
-                ordinals: pg_connection_pool(&config.ordinals_db.to_conn_config()).unwrap(),
+                ordinals: new_pg_connection_pool(&config.ordinals_db.to_conn_config()).unwrap(),
                 brc20: match (config.meta_protocols.brc20, &config.brc20_db) {
                     (true, Some(brc20_db)) => {
-                        Some(pg_connection_pool(&brc20_db.to_conn_config()).unwrap())
+                        Some(new_pg_connection_pool(&brc20_db.to_conn_config()).unwrap())
                     }
                     _ => None,
                 },

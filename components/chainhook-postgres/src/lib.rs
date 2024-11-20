@@ -10,6 +10,7 @@ pub use deadpool_postgres;
 
 use tokio_postgres::{Client, Config, NoTls};
 
+/// A Postgres configuration for a single database.
 pub struct PgConnectionConfig {
     pub dbname: String,
     pub host: String,
@@ -18,7 +19,9 @@ pub struct PgConnectionConfig {
     pub password: Option<String>,
 }
 
-pub fn pg_connection_pool(config: &PgConnectionConfig) -> Result<Pool, String> {
+/// Creates a Postgres connection pool based on a single database config. You can then use this pool to create ad-hoc clients and
+/// transactions for interacting with the database.
+pub fn new_pg_connection_pool(config: &PgConnectionConfig) -> Result<Pool, String> {
     let mut pg_config = Config::new();
     pg_config
         .dbname(&config.dbname)
@@ -41,8 +44,8 @@ pub fn pg_connection_pool(config: &PgConnectionConfig) -> Result<Pool, String> {
         .map_err(|e| format!("unable to build pg connection pool: {e}"))?)
 }
 
-/// Creates a short-lived connection and passes it into the given closure. Use this when you want to make sure the connection gets
-/// closed once your work is complete.
+/// Creates a short-lived client and passes it into the given closure. Takes the connection out of the given pool, so it may or
+/// may not close once the given closure is complete.
 pub async fn with_pg_client<F, Fut, T>(pool: &Pool, f: F) -> Result<T, String>
 where
     F: FnOnce(Object) -> Fut,
@@ -56,8 +59,8 @@ where
     Ok(result)
 }
 
-/// Creates a new connection, opens a transaction, and passes it into the given closure. Use this when you want to run queries
-/// within the confines of a single well defined transaction.
+/// Takes a connection from the given pool, opens a transaction, and passes it into the given closure. Use this when you want to
+/// run queries within the confines of a single well defined transaction.
 pub async fn with_pg_transaction<'a, F, Fut, T>(pool: &Pool, f: F) -> Result<T, String>
 where
     F: FnOnce(&'a Transaction<'a>) -> Fut,

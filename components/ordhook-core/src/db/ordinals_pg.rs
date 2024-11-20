@@ -24,6 +24,8 @@ use super::models::{
 embed_migrations!("../../migrations/ordinals");
 pub async fn migrate(client: &mut Client) -> Result<(), String> {
     return match migrations::runner()
+        .set_abort_divergent(false)
+        .set_abort_missing(false)
         .set_migration_table_name("pgmigrations")
         .run_async(client)
         .await
@@ -328,6 +330,8 @@ async fn insert_locations<T: GenericClient>(
             params.push(&row.transfer_type);
             params.push(&row.timestamp);
         }
+        // Insert locations but also calculate inscription transfers, keeping in mind transfers could come from within an earlier
+        // tx in the same block.
         client
             .query(
                 &format!(
@@ -345,15 +349,27 @@ async fn insert_locations<T: GenericClient>(
                     ),
                     moved_inscriptions AS (
                         SELECT i.inscription_id, i.number, i.ordinal_number, li.block_height, li.tx_index,
-                            (
-                                SELECT l.block_height || ',' || l.tx_index
-                                FROM locations AS l
-                                WHERE l.ordinal_number = li.ordinal_number AND (
-                                    l.block_height < li.block_height OR
-                                    (l.block_height = li.block_height AND l.tx_index < li.tx_index)
+                            COALESCE(
+                                (
+                                    SELECT l.block_height || ',' || l.tx_index
+                                    FROM locations AS l
+                                    WHERE l.ordinal_number = li.ordinal_number AND (
+                                        l.block_height < li.block_height OR
+                                        (l.block_height = li.block_height AND l.tx_index < li.tx_index)
+                                    )
+                                    ORDER BY l.block_height DESC, l.tx_index DESC
+                                    LIMIT 1
+                                ),
+                                (
+                                    SELECT l.block_height || ',' || l.tx_index
+                                    FROM location_inserts AS l
+                                    WHERE l.ordinal_number = li.ordinal_number AND (
+                                        l.block_height < li.block_height OR
+                                        (l.block_height = li.block_height AND l.tx_index < li.tx_index)
+                                    )
+                                    ORDER BY l.block_height DESC, l.tx_index DESC
+                                    LIMIT 1
                                 )
-                                ORDER BY l.block_height DESC, l.tx_index DESC
-                                LIMIT 1
                             ) AS from_data,
                             (ROW_NUMBER() OVER (ORDER BY li.block_height ASC, li.tx_index ASC) + (SELECT COALESCE(max, -1) FROM prev_transfer_index)) AS block_transfer_index
                         FROM inscriptions AS i
@@ -480,7 +496,7 @@ async fn insert_current_locations<T: GenericClient>(
                 "WITH new_owners AS (
                     SELECT address, COUNT(*) AS count
                     FROM current_locations
-                    WHERE ordinal_number = ANY ($1)
+                    WHERE ordinal_number = ANY ($1) AND address IS NOT NULL
                     GROUP BY address
                 )
                 INSERT INTO counts_by_address (address, count)
