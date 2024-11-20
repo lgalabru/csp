@@ -83,9 +83,9 @@ impl Service {
         }
     }
 
-    /// Returns at which block height we should start indexing. This only looks at the max index chain tip, not at the blocks DB
-    /// chain tip.
-    pub async fn get_start_block_height(&self) -> Result<u64, String> {
+    /// Returns the last block height we have indexed. This only looks at the max index chain tip, not at the blocks DB chain tip.
+    /// Adjusts for starting index height depending on Bitcoin network.
+    pub async fn get_index_chain_tip(&self) -> Result<u64, String> {
         let chain_tip = with_pg_transaction(&self.pg_pools.ordinals, |client| async move {
             // Update chain tip to match first inscription height at least.
             let db_height = ordinals_pg::get_chain_tip_block_height(client)

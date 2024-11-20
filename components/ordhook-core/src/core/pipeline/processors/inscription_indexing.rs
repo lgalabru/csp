@@ -38,7 +38,7 @@ use crate::{
     },
     db::{blocks::open_blocks_db_with_retry, cursor::TransactionBytesCursor, ordinals_pg},
     service::PgConnectionPools,
-    try_error, try_info,
+    try_crit, try_info,
     utils::monitoring::PrometheusMonitoring,
 };
 
@@ -134,8 +134,8 @@ pub fn start_inscription_indexing_processor(
                     {
                         Ok(blocks) => blocks,
                         Err(e) => {
-                            try_error!(ctx, "error processing blocks: {e}");
-                            vec![]
+                            try_crit!(ctx, "Error indexing blocks: {e}");
+                            std::process::exit(1);
                         }
                     };
 

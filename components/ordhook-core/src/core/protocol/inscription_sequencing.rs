@@ -522,22 +522,8 @@ pub async fn augment_block_with_inscriptions(
     ctx: &Context,
 ) -> Result<(), String> {
     // Handle re-inscriptions
-    let mut reinscriptions_data = HashMap::new();
-    for (_, inscription_data) in inscriptions_data.iter() {
-        if inscription_data.ordinal_number != 0 {
-            // TODO(rafaelcr): This seems like an expensive call to do all the time. Can we optimize?
-            if let Some(inscription_id) =
-                ordinals_pg::get_blessed_inscription_id_for_ordinal_number(
-                    db_tx,
-                    inscription_data.ordinal_number,
-                )
-                .await?
-            {
-                reinscriptions_data.insert(inscription_data.ordinal_number, inscription_id);
-            }
-        }
-    }
-
+    let mut reinscriptions_data =
+        ordinals_pg::get_reinscriptions_for_block(inscriptions_data, db_tx).await?;
     // Handle sat oveflows
     let mut sats_overflows = VecDeque::new();
 

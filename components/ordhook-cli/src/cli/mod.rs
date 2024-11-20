@@ -314,11 +314,8 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let mut service = Service::new(&config, ctx);
                 // TODO(rafaelcr): This only works if there's a rocksdb file already containing blocks previous to the first
                 // inscription height.
-                let start_block = service.get_start_block_height().await?;
-                try_info!(
-                    ctx,
-                    "Inscription ingestion will start at block #{start_block}"
-                );
+                let start_block = service.get_index_chain_tip().await?;
+                try_info!(ctx, "Index chain tip is at #{start_block}");
 
                 let mut predicates = vec![];
                 for post_to in cmd.post_to.iter() {

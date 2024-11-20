@@ -37,3 +37,13 @@ macro_rules! try_error {
         $a.try_log(|l| error!(l, $tag));
     };
 }
+
+#[macro_export]
+macro_rules! try_crit {
+    ($a:expr, $tag:expr, $($args:tt)*) => {
+        $a.try_log(|l| crit!(l, $tag, $($args)*));
+    };
+    ($a:expr, $tag:expr) => {
+        $a.try_log(|l| crit!(l, $tag));
+    };
+}

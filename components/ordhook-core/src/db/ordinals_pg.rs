@@ -95,19 +95,33 @@ pub async fn get_lowest_cursed_classic_inscription_number<T: GenericClient>(
     Ok(min)
 }
 
-pub async fn get_blessed_inscription_id_for_ordinal_number<T: GenericClient>(
+pub async fn get_reinscriptions_for_block<T: GenericClient>(
+    inscriptions_data: &mut BTreeMap<(TransactionIdentifier, usize, u64), TraversalResult>,
     client: &T,
-    ordinal_number: u64,
-) -> Result<Option<String>, String> {
-    let row = client
-        .query_opt("SELECT inscription_id FROM inscriptions WHERE ordinal_number = $1 AND classic_number >= 0", &[&PgNumericU64(ordinal_number)])
+) -> Result<HashMap<u64, String>, String> {
+    let mut ordinal_numbers = vec![];
+    for (_, value) in inscriptions_data {
+        if value.ordinal_number != 0 {
+            ordinal_numbers.push(PgNumericU64(value.ordinal_number));
+        }
+    }
+    let number_refs: Vec<&PgNumericU64> = ordinal_numbers.iter().collect();
+    let rows = client
+        .query(
+            "SELECT ordinal_number, inscription_id
+            FROM inscriptions
+            WHERE ordinal_number = ANY ($1) AND classic_number >= 0",
+            &[&number_refs],
+        )
         .await
-        .map_err(|e| format!("get_blessed_inscription_id_for_ordinal_number: {e}"))?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    let id: Option<String> = row.get("inscription_id");
-    Ok(id)
+        .map_err(|e| format!("get_reinscriptions_for_block: {e}"))?;
+    let mut results = HashMap::new();
+    for row in rows.iter() {
+        let ordinal_number: PgNumericU64 = row.get("ordinal_number");
+        let inscription_id: String = row.get("inscription_id");
+        results.insert(ordinal_number.0, inscription_id);
+    }
+    Ok(results)
 }
 
 pub async fn has_ordinal_activity_at_block<T: GenericClient>(
@@ -652,6 +666,7 @@ pub async fn update_chain_tip<T: GenericClient>(
     Ok(())
 }
 
+/// Inserts an indexed ordinals block into the DB.
 pub async fn insert_block<T: GenericClient>(
     block: &BitcoinBlockData,
     client: &T,
