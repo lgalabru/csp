@@ -23,40 +23,6 @@ pub async fn migrate_dbs(config: &Config, ctx: &Context) -> Result<(), String> {
     Ok(())
 }
 
-/// Deletes all block data from all databases within the specified block range.
-// pub fn drop_block_data_from_all_dbs(
-//     start_block: u64,
-//     end_block: u64,
-//     blocks_db_rw: &DB,
-//     sqlite_dbs_rw: &SqliteDbConnections,
-//     ctx: &Context,
-// ) -> Result<(), String> {
-//     try_info!(
-//         ctx,
-//         "Deleting entries from block #{start_block} to block #{end_block}"
-//     );
-//     delete_blocks_in_block_range(start_block as u32, end_block as u32, &blocks_db_rw, &ctx);
-//     try_info!(
-//         ctx,
-//         "Deleting inscriptions and locations from block #{start_block} to block #{end_block}"
-//     );
-//     // FIXME
-//     delete_inscriptions_in_block_range(
-//         start_block as u32,
-//         end_block as u32,
-//         &sqlite_dbs_rw.ordinals,
-//         &ctx,
-//     );
-//     if let Some(conn) = &sqlite_dbs_rw.brc20 {
-//         delete_activity_in_block_range(start_block as u32, end_block as u32, &conn, &ctx);
-//         try_info!(
-//             ctx,
-//             "Deleting BRC-20 activity from block #{start_block} to block #{end_block}"
-//         );
-//     }
-//     Ok(())
-// }
-
 /// Drops DB files in a test environment.
 #[cfg(test)]
 pub fn drop_all_dbs(config: &Config) {

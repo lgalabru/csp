@@ -257,3 +257,8 @@ pub async fn augment_block_with_operations<T: GenericClient>(
     }
     Ok(())
 }
+
+pub async fn rollback_block_operations<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
+    //
+    Ok(())
+}

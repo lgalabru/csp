@@ -824,3 +824,8 @@ pub async fn insert_block<T: GenericClient>(
 
     Ok(())
 }
+
+pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
+    //
+    Ok(())
+}

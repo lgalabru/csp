@@ -19,6 +19,7 @@ use std::hash::BuildHasherDefault;
 use crate::{
     core::{
         meta_protocols::brc20::{
+            brc20_pg,
             cache::{brc20_new_cache, Brc20MemoryCache},
             index::index_block_and_insert_brc20_operations,
         },
@@ -36,7 +37,11 @@ use crate::{
             satoshi_tracking::augment_block_with_transfers,
         },
     },
-    db::{blocks::open_blocks_db_with_retry, cursor::TransactionBytesCursor, ordinals_pg},
+    db::{
+        blocks::{self, open_blocks_db_with_retry},
+        cursor::TransactionBytesCursor,
+        ordinals_pg,
+    },
     service::PgConnectionPools,
     try_crit, try_info,
     utils::monitoring::PrometheusMonitoring,
@@ -285,6 +290,45 @@ pub async fn process_block(
         Ok(())
     })
     .await
+}
+
+pub async fn rollback_block(
+    block_height: u64,
+    config: &Config,
+    pg_pools: &PgConnectionPools,
+    ctx: &Context,
+) -> Result<(), String> {
+    try_info!(ctx, "Rolling back block #{block_height}...");
+    // Drop from blocks DB.
+    let blocks_db = open_blocks_db_with_retry(true, &config, ctx);
+    blocks::delete_blocks_in_block_range(
+        block_height as u32,
+        block_height as u32,
+        &blocks_db,
+        &ctx,
+    );
+    // Drop from postgres.
+    with_pg_transaction(&pg_pools.ordinals, |client| async move {
+        ordinals_pg::rollback_block(block_height, client).await?;
+        try_info!(
+            ctx,
+            "Rolled back inscription activity at block #{block_height}"
+        );
+        // BRC-20
+        if let (true, Some(brc20_db)) = (config.meta_protocols.brc20, &pg_pools.brc20) {
+            with_pg_transaction(brc20_db, |tx| async move {
+                Ok(brc20_pg::rollback_block_operations(block_height, tx).await?)
+            })
+            .await?;
+            try_info!(
+                ctx,
+                "Rolled back BRC-20 operations at block #{block_height}"
+            );
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(())
 }
 
 // #[cfg(test)]

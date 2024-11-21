@@ -7,7 +7,7 @@ use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCach
 use crate::core::pipeline::bitcoind_download_blocks;
 use crate::core::pipeline::processors::block_archiving::start_block_archiving_processor;
 use crate::core::pipeline::processors::inscription_indexing::{
-    process_block, start_inscription_indexing_processor,
+    process_block, rollback_block, start_inscription_indexing_processor,
 };
 use crate::core::protocol::inscription_parsing::{
     get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
@@ -209,6 +209,14 @@ impl Service {
             observer_event_rx,
             predicate_activity_relayer,
         )?;
+        Ok(())
+    }
+
+    /// Rolls back index data for the specified block heights.
+    pub async fn rollback(&self, block_heights: &Vec<u64>) -> Result<(), String> {
+        for block_height in block_heights.iter() {
+            rollback_block(*block_height, &self.config, &self.pg_pools, &self.ctx).await?;
+        }
         Ok(())
     }
 

@@ -233,10 +233,7 @@ struct SyncOrdhookDbCommand {
 
 #[derive(Parser, PartialEq, Clone, Debug)]
 struct DropOrdhookDbCommand {
-    /// Starting block
-    pub start_block: u64,
-    /// Ending block
-    pub end_block: u64,
+    pub blocks: u32,
     /// Load config file path
     #[clap(long = "config-path")]
     pub config_path: Option<String>,
@@ -411,34 +408,27 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 println!("{:?}", missing_blocks);
             }
         }
-        Command::Db(OrdhookDbCommand::Drop(_cmd)) => {
-            // let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
+        Command::Db(OrdhookDbCommand::Drop(cmd)) => {
+            let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
 
-            // println!(
-            //     "{} blocks will be deleted. Confirm? [Y/n]",
-            //     cmd.end_block - cmd.start_block + 1
-            // );
-            // FIXME
-            // let mut buffer = String::new();
-            // std::io::stdin().read_line(&mut buffer).unwrap();
-            // if buffer.starts_with('n') {
-            //     return Err("Deletion aborted".to_string());
-            // }
+            let service = Service::new(&config, ctx);
+            let chain_tip = service.get_index_chain_tip().await?;
+            println!("Index chain tip is at #{chain_tip}");
+            println!(
+                "{} blocks will be dropped. New index chain tip will be at #{}. Confirm? [Y/n]",
+                cmd.blocks,
+                chain_tip - cmd.blocks as u64
+            );
+            let mut buffer = String::new();
+            std::io::stdin().read_line(&mut buffer).unwrap();
+            if buffer.starts_with('n') {
+                return Err("Deletion aborted".to_string());
+            }
 
-            // let (blocks_db_rw, sqlite_dbs_rw) = open_all_dbs_rw(&config, &ctx)?;
-
-            // drop_block_data_from_all_dbs(
-            //     cmd.start_block,
-            //     cmd.end_block,
-            //     &blocks_db_rw,
-            //     &sqlite_dbs_rw,
-            //     ctx,
-            // )?;
-            // info!(
-            //     ctx.expect_logger(),
-            //     "Cleaning ordhook_db: {} blocks dropped",
-            //     cmd.end_block - cmd.start_block + 1
-            // );
+            let service = Service::new(&config, ctx);
+            let block_heights: Vec<u64> = ((chain_tip - cmd.blocks as u64)..=chain_tip).collect();
+            service.rollback(&block_heights).await?;
+            println!("{} blocks dropped", cmd.blocks);
         }
     }
     Ok(())
