@@ -16,7 +16,6 @@ pub struct DbToken {
     pub decimals: PgSmallIntU8,
     pub self_mint: bool,
     pub minted_supply: PgNumericU128,
-    pub burned_supply: PgNumericU128,
     pub tx_count: PgBigIntU32,
     pub timestamp: PgBigIntU32,
 }
@@ -38,7 +37,6 @@ impl DbToken {
             decimals: row.get("decimals"),
             self_mint: row.get("self_mint"),
             minted_supply: row.get("minted_supply"),
-            burned_supply: row.get("burned_supply"),
             tx_count: row.get("tx_count"),
             timestamp: row.get("timestamp"),
         }

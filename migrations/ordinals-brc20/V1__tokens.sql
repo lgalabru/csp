@@ -13,8 +13,7 @@ CREATE TABLE tokens (
     decimals SMALLINT NOT NULL,
     self_mint BOOLEAN NOT NULL DEFAULT FALSE,
     minted_supply NUMERIC DEFAULT 0,
-    burned_supply NUMERIC DEFAULT 0,
-    tx_count BIGINT DEFAULT 0,
+    tx_count INT DEFAULT 0,
     timestamp BIGINT NOT NULL
 );
 CREATE INDEX tokens_inscription_id_index ON tokens (inscription_id);

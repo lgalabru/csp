@@ -36,6 +36,8 @@ pub struct Brc20DbCache {
     token_rows: Vec<DbToken>,
     operation_counts: HashMap<String, i32>,
     address_operation_counts: HashMap<String, HashMap<String, i32>>,
+    token_operation_counts: HashMap<String, i32>,
+    token_minted_supplies: HashMap<String, PgNumericU128>,
 }
 
 impl Brc20DbCache {
@@ -45,6 +47,8 @@ impl Brc20DbCache {
             token_rows: Vec::new(),
             operation_counts: HashMap::new(),
             address_operation_counts: HashMap::new(),
+            token_operation_counts: HashMap::new(),
+            token_minted_supplies: HashMap::new(),
         }
     }
 
@@ -57,6 +61,10 @@ impl Brc20DbCache {
         self.operation_counts.clear();
         brc20_pg::update_address_operation_counts(&self.address_operation_counts, db_tx).await?;
         self.address_operation_counts.clear();
+        brc20_pg::update_token_operation_counts(&self.token_operation_counts, db_tx).await?;
+        self.token_operation_counts.clear();
+        brc20_pg::update_token_minted_supplies(&self.token_minted_supplies, db_tx).await?;
+        self.token_minted_supplies.clear();
         Ok(())
     }
 }
@@ -195,7 +203,6 @@ impl Brc20MemoryCache {
             limit: PgNumericU128(data.lim),
             decimals: PgSmallIntU8(data.dec),
             minted_supply: PgNumericU128(0),
-            burned_supply: PgNumericU128(0),
             tx_count: PgBigIntU32(0),
             timestamp: PgBigIntU32(timestamp),
         };
@@ -236,6 +243,11 @@ impl Brc20MemoryCache {
             to_address: None,
             amount: PgNumericU128(0),
         });
+        self.db_cache
+            .token_operation_counts
+            .entry(data.tick.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
         self.ignore_inscription(reveal.ordinal_number);
         Ok(())
     }
@@ -297,6 +309,16 @@ impl Brc20MemoryCache {
             timestamp: PgBigIntU32(timestamp),
             to_address: None,
         });
+        self.db_cache
+            .token_operation_counts
+            .entry(data.tick.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+        self.db_cache
+            .token_minted_supplies
+            .entry(data.tick.clone())
+            .and_modify(|c| *c += data.amt)
+            .or_insert(PgNumericU128(data.amt));
         self.ignore_inscription(reveal.ordinal_number);
         Ok(())
     }
@@ -355,6 +377,11 @@ impl Brc20MemoryCache {
             timestamp: PgBigIntU32(timestamp),
             to_address: None,
         };
+        self.db_cache
+            .token_operation_counts
+            .entry(data.tick.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
         self.unsent_transfers
             .put(reveal.ordinal_number, ledger_row.clone());
         self.db_cache.operations.push(ledger_row);
@@ -437,6 +464,11 @@ impl Brc20MemoryCache {
             timestamp: PgBigIntU32(timestamp),
             to_address: None,
         });
+        self.db_cache
+            .token_operation_counts
+            .entry(data.tick.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
         let balance = self
             .get_token_address_avail_balance(&data.tick, &data.receiver_address, db_tx)
             .await?

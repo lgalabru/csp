@@ -123,7 +123,6 @@ pub async fn insert_tokens<T: GenericClient>(
             params.push(&row.decimals);
             params.push(&row.self_mint);
             params.push(&row.minted_supply);
-            params.push(&row.burned_supply);
             params.push(&row.tx_count);
             params.push(&row.timestamp);
         }
@@ -131,9 +130,9 @@ pub async fn insert_tokens<T: GenericClient>(
             .query(
                 &format!("INSERT INTO tokens
                     (ticker, display_ticker, inscription_id, inscription_number, block_height, block_hash, tx_id, tx_index,
-                    address, max, \"limit\", decimals, self_mint, minted_supply, burned_supply, tx_count, timestamp)
+                    address, max, \"limit\", decimals, self_mint, minted_supply, tx_count, timestamp)
                     VALUES {}
-                    ON CONFLICT (ticker) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 17)),
+                    ON CONFLICT (ticker) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 16)),
                 &params,
             )
             .await
@@ -234,6 +233,68 @@ pub async fn update_address_operation_counts<T: GenericClient>(
         )
         .await
         .map_err(|e| format!("update_address_operation_counts: {e}"))?;
+    Ok(())
+}
+
+pub async fn update_token_operation_counts<T: GenericClient>(
+    counts: &HashMap<String, i32>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (tick, value) in counts {
+        params.push(tick);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "WITH changes (tick, tx_count) AS (VALUES {})
+                UPDATE tokens SET tx_count = (
+                    SELECT tokens.tx_count + c.tx_count::int
+                    FROM changes AS c
+                    WHERE c.tick = tokens.tick
+                )
+                WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
+                utils::multi_row_query_param_str(counts.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_token_operation_counts: {e}"))?;
+    Ok(())
+}
+
+pub async fn update_token_minted_supplies<T: GenericClient>(
+    supplies: &HashMap<String, PgNumericU128>,
+    client: &T,
+) -> Result<(), String> {
+    if supplies.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (tick, value) in supplies {
+        params.push(tick);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "WITH changes (tick, minted_supply) AS (VALUES {})
+                UPDATE tokens SET minted_supply = (
+                    SELECT tokens.minted_supply + c.minted_supply::numeric
+                    FROM changes AS c
+                    WHERE c.tick = tokens.tick
+                )
+                WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
+                utils::multi_row_query_param_str(supplies.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_token_minted_supplies: {e}"))?;
     Ok(())
 }
 
