@@ -83,8 +83,8 @@ pub async fn verify_brc20_operation(
                 VerifiedBrc20TokenDeployData {
                     tick: data.tick.clone(),
                     display_tick: data.display_tick.clone(),
-                    max: decimals_str_amount_to_u128(&data.max, decimals),
-                    lim: decimals_str_amount_to_u128(&data.lim, decimals),
+                    max: decimals_str_amount_to_u128(&data.max, decimals)?,
+                    lim: decimals_str_amount_to_u128(&data.lim, decimals)?,
                     dec: decimals,
                     address: inscriber_address.clone(),
                     self_mint: data.self_mint,
@@ -122,7 +122,7 @@ pub async fn verify_brc20_operation(
                 // ));
                 return Ok(None);
             }
-            let amount = decimals_str_amount_to_u128(&data.amt, token.decimals.0);
+            let amount = decimals_str_amount_to_u128(&data.amt, token.decimals.0)?;
             if amount > token.limit.0 {
                 // return Err(format!(
                 //     "Cannot mint more than {} tokens for {}, attempted to mint {}",
@@ -176,7 +176,7 @@ pub async fn verify_brc20_operation(
                 // ));
                 return Ok(None);
             };
-            let amount = decimals_str_amount_to_u128(&data.amt, token.decimals.0);
+            let amount = decimals_str_amount_to_u128(&data.amt, token.decimals.0)?;
             if avail_balance < amount {
                 // return Err(format!("Insufficient balance for {} transfer, attempting to transfer {}, only {} available", token.ticker, data.amt, avail_balance));
                 return Ok(None);

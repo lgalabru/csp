@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use chainhook_postgres::{
-    deadpool_postgres::GenericClient, tokio_postgres::{types::ToSql, Client}, types::{PgNumericU128, PgNumericU64}, utils
+    deadpool_postgres::GenericClient,
+    tokio_postgres::{types::ToSql, Client},
+    types::{PgNumericU128, PgNumericU64},
+    utils,
 };
 use chainhook_sdk::types::{
     BitcoinBlockData, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData, Brc20TransferData,
@@ -100,6 +103,9 @@ pub async fn insert_tokens<T: GenericClient>(
     tokens: &Vec<DbToken>,
     client: &T,
 ) -> Result<(), String> {
+    if tokens.len() == 0 {
+        return Ok(());
+    }
     for chunk in tokens.chunks(500) {
         let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
         for row in chunk.iter() {
@@ -140,6 +146,9 @@ pub async fn insert_operations<T: GenericClient>(
     operations: &Vec<DbOperation>,
     client: &T,
 ) -> Result<(), String> {
+    if operations.len() == 0 {
+        return Ok(());
+    }
     for chunk in operations.chunks(500) {
         let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
         for row in chunk.iter() {
@@ -162,7 +171,7 @@ pub async fn insert_operations<T: GenericClient>(
             .query(
                 &format!("INSERT INTO operations
                     (ticker, operation, inscription_id, ordinal_number, block_height, block_hash, tx_id, tx_index, output,
-                    \"offset\", timestamp, address, to_address, avail_balance, trans_balance)
+                    \"offset\", timestamp, address, to_address, amount)
                     VALUES {}
                     ON CONFLICT (inscription_id, operation) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 14)),
                 &params,
@@ -170,6 +179,61 @@ pub async fn insert_operations<T: GenericClient>(
             .await
             .map_err(|e| format!("insert_operations: {e}"))?;
     }
+    Ok(())
+}
+
+pub async fn update_operation_counts<T: GenericClient>(
+    counts: &HashMap<String, i32>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (key, value) in counts {
+        params.push(key);
+        params.push(value);
+    }
+    client
+        .query(
+            &format!(
+                "INSERT INTO counts_by_mime_type (mime_type, count) VALUES {}
+                ON CONFLICT (mime_type) DO UPDATE SET count = counts_by_mime_type.count + EXCLUDED.count",
+                utils::multi_row_query_param_str(counts.len(), 2)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_operation_counts: {e}"))?;
+    Ok(())
+}
+
+pub async fn update_address_operation_counts<T: GenericClient>(
+    counts: &HashMap<String, HashMap<String, i32>>,
+    client: &T,
+) -> Result<(), String> {
+    if counts.len() == 0 {
+        return Ok(());
+    }
+    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+    for (address, map) in counts {
+        for (operation, value) in map {
+            params.push(address);
+            params.push(operation);
+            params.push(value);
+        }
+    }
+    client
+        .query(
+            &format!(
+                "INSERT INTO counts_by_address_operation (address, operation, count) VALUES {}
+                ON CONFLICT (address, operation) DO UPDATE SET count = counts_by_address_operation.count + EXCLUDED.count",
+                utils::multi_row_query_param_str(counts.len(), 3)
+            ),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("update_address_operation_counts: {e}"))?;
     Ok(())
 }
 
@@ -258,7 +322,10 @@ pub async fn augment_block_with_operations<T: GenericClient>(
     Ok(())
 }
 
-pub async fn rollback_block_operations<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
+pub async fn rollback_block_operations<T: GenericClient>(
+    block_height: u64,
+    client: &T,
+) -> Result<(), String> {
     //
     Ok(())
 }

@@ -1,7 +1,6 @@
-CREATE TYPE operation AS ENUM ('deploy', 'mint', 'transfer', 'transfer_send', 'transfer_receive');
 CREATE TABLE operations (
     ticker TEXT NOT NULL,
-    operation operation NOT NULL,
+    operation TEXT NOT NULL,
     inscription_id TEXT NOT NULL,
     inscription_number BIGINT NOT NULL,
     ordinal_number NUMERIC NOT NULL,

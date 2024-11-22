@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::{collections::HashMap, num::NonZeroUsize};
 
 use chainhook_postgres::{
     deadpool_postgres::Transaction,
@@ -9,6 +9,7 @@ use chainhook_sdk::types::{
     TransactionIdentifier,
 };
 use lru::LruCache;
+use maplit::hashmap;
 
 use crate::{
     config::Config, core::protocol::satoshi_tracking::parse_output_and_offset_from_satpoint,
@@ -33,6 +34,8 @@ pub fn brc20_new_cache(config: &Config) -> Option<Brc20MemoryCache> {
 pub struct Brc20DbCache {
     operations: Vec<DbOperation>,
     token_rows: Vec<DbToken>,
+    operation_counts: HashMap<String, i32>,
+    address_operation_counts: HashMap<String, HashMap<String, i32>>,
 }
 
 impl Brc20DbCache {
@@ -40,18 +43,20 @@ impl Brc20DbCache {
         Brc20DbCache {
             operations: Vec::new(),
             token_rows: Vec::new(),
+            operation_counts: HashMap::new(),
+            address_operation_counts: HashMap::new(),
         }
     }
 
     pub async fn flush(&mut self, db_tx: &Transaction<'_>) -> Result<(), String> {
-        if self.token_rows.len() > 0 {
-            brc20_pg::insert_tokens(&self.token_rows, db_tx).await?;
-            self.token_rows.clear();
-        }
-        if self.operations.len() > 0 {
-            brc20_pg::insert_operations(&self.operations, db_tx).await?;
-            self.operations.clear();
-        }
+        brc20_pg::insert_tokens(&self.token_rows, db_tx).await?;
+        self.token_rows.clear();
+        brc20_pg::insert_operations(&self.operations, db_tx).await?;
+        self.operations.clear();
+        brc20_pg::update_operation_counts(&self.operation_counts, db_tx).await?;
+        self.operation_counts.clear();
+        brc20_pg::update_address_operation_counts(&self.address_operation_counts, db_tx).await?;
+        self.address_operation_counts.clear();
         Ok(())
     }
 }
@@ -199,9 +204,24 @@ impl Brc20MemoryCache {
         self.token_addr_avail_balances
             .put(format!("{}:{}", token.ticker, data.address), 0);
         self.db_cache.token_rows.push(token);
+        let operation = "deploy".to_string();
+        self.db_cache
+            .operation_counts
+            .entry(operation.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+        self.db_cache
+            .address_operation_counts
+            .entry(data.address.clone())
+            .and_modify(|c| {
+                (*c).entry(operation.clone())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
+            })
+            .or_insert(hashmap! { operation.clone() => 1 });
         self.db_cache.operations.push(DbOperation {
             ticker: data.tick.clone(),
-            operation: "deploy".to_string(),
+            operation,
             inscription_id: reveal.inscription_id.clone(),
             inscription_number: reveal.inscription_number.jubilee,
             ordinal_number: PgNumericU64(reveal.ordinal_number),
@@ -245,6 +265,21 @@ impl Brc20MemoryCache {
             format!("{}:{}", data.tick, data.address),
             balance + data.amt, // Increase for minter.
         );
+        let operation = "mint".to_string();
+        self.db_cache
+            .operation_counts
+            .entry(operation.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+        self.db_cache
+            .address_operation_counts
+            .entry(data.address.clone())
+            .and_modify(|c| {
+                (*c).entry(operation.clone())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
+            })
+            .or_insert(hashmap! { operation.clone() => 1 });
         self.db_cache.operations.push(DbOperation {
             inscription_id: reveal.inscription_id.clone(),
             inscription_number: reveal.inscription_number.jubilee,
@@ -254,7 +289,7 @@ impl Brc20MemoryCache {
             ticker: data.tick.clone(),
             address: data.address.clone(),
             amount: PgNumericU128(data.amt),
-            operation: "mint".to_string(),
+            operation,
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output,
@@ -288,6 +323,21 @@ impl Brc20MemoryCache {
             format!("{}:{}", data.tick, data.address),
             balance - data.amt, // Decrease for sender.
         );
+        let operation = "transfer".to_string();
+        self.db_cache
+            .operation_counts
+            .entry(operation.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+        self.db_cache
+            .address_operation_counts
+            .entry(data.address.clone())
+            .and_modify(|c| {
+                (*c).entry(operation.clone())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
+            })
+            .or_insert(hashmap! { operation.clone() => 1 });
         let ledger_row = DbOperation {
             inscription_id: reveal.inscription_id.clone(),
             inscription_number: reveal.inscription_number.jubilee,
@@ -297,7 +347,7 @@ impl Brc20MemoryCache {
             ticker: data.tick.clone(),
             address: data.address.clone(),
             amount: PgNumericU128(data.amt),
-            operation: "transfer".to_string(),
+            operation,
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output,
@@ -327,6 +377,32 @@ impl Brc20MemoryCache {
         let transfer_row = self
             .get_unsent_transfer_row(transfer.ordinal_number, db_tx)
             .await?;
+        let operation = "transfer_send".to_string();
+        self.db_cache
+            .operation_counts
+            .entry(operation.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+        self.db_cache
+            .address_operation_counts
+            .entry(data.sender_address.clone())
+            .and_modify(|c| {
+                (*c).entry(operation.clone())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
+            })
+            .or_insert(hashmap! { operation.clone() => 1 });
+        if data.sender_address != data.receiver_address {
+            self.db_cache
+                .address_operation_counts
+                .entry(data.receiver_address.clone())
+                .and_modify(|c| {
+                    (*c).entry(operation.clone())
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
+                })
+                .or_insert(hashmap! { operation.clone() => 1 });
+        }
         self.db_cache.operations.push(DbOperation {
             inscription_id: transfer_row.inscription_id.clone(),
             inscription_number: transfer_row.inscription_number,
@@ -336,7 +412,7 @@ impl Brc20MemoryCache {
             ticker: data.tick.clone(),
             address: data.sender_address.clone(),
             amount: PgNumericU128(data.amt),
-            operation: "transfer_send".to_string(),
+            operation: operation.clone(),
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output: output.clone(),
@@ -353,7 +429,7 @@ impl Brc20MemoryCache {
             ticker: data.tick.clone(),
             address: data.receiver_address.clone(),
             amount: PgNumericU128(data.amt),
-            operation: "transfer_receive".to_string(),
+            operation,
             block_hash: block_identifier.hash.clone(),
             tx_id: tx_identifier.hash.clone(),
             output,

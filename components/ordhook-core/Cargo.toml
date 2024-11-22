@@ -49,6 +49,7 @@ regex = "1.10.3"
 prometheus = "0.13.3"
 chainhook-postgres = { path = "../chainhook-postgres" }
 refinery = { version = "0.8", features = ["tokio-postgres"] }
+maplit = "1.0.2"
 
 [dev-dependencies]
 test-case = "3.1.0"

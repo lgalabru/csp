@@ -10,7 +10,7 @@ CREATE TABLE tokens (
     address TEXT NOT NULL,
     max NUMERIC NOT NULL,
     "limit" NUMERIC NOT NULL,
-    decimals INT NOT NULL,
+    decimals SMALLINT NOT NULL,
     self_mint BOOLEAN NOT NULL DEFAULT FALSE,
     minted_supply NUMERIC DEFAULT 0,
     burned_supply NUMERIC DEFAULT 0,
