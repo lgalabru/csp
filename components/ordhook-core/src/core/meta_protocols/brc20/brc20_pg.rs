@@ -154,6 +154,7 @@ pub async fn insert_operations<T: GenericClient>(
             params.push(&row.ticker);
             params.push(&row.operation);
             params.push(&row.inscription_id);
+            params.push(&row.inscription_number);
             params.push(&row.ordinal_number);
             params.push(&row.block_height);
             params.push(&row.block_hash);
@@ -168,11 +169,49 @@ pub async fn insert_operations<T: GenericClient>(
         }
         client
             .query(
-                &format!("INSERT INTO operations
-                    (ticker, operation, inscription_id, ordinal_number, block_height, block_hash, tx_id, tx_index, output,
-                    \"offset\", timestamp, address, to_address, amount)
-                    VALUES {}
-                    ON CONFLICT (inscription_id, operation) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 14)),
+                // Insert operations and figure out balance changes directly in postgres so we can do direct arithmetic with
+                // NUMERIC values.
+                &format!(
+                    "WITH inserts AS (
+                        INSERT INTO operations
+                        (ticker, operation, inscription_id, inscription_number, ordinal_number, block_height, block_hash, tx_id,
+                        tx_index, output, \"offset\", timestamp, address, to_address, amount)
+                        VALUES {}
+                        ON CONFLICT (inscription_id, operation) DO NOTHING
+                        RETURNING address, ticker, operation, amount
+                    ),
+                    balance_changes AS (
+                        SELECT ticker, address,
+                            CASE
+                                WHEN operation = 'mint' OR operation = 'transfer_receive' THEN amount
+                                WHEN operation = 'transfer' THEN -1 * amount
+                                ELSE 0
+                            END AS avail_balance,
+                            CASE
+                                WHEN operation = 'transfer' THEN amount
+                                WHEN operation = 'transfer_send' THEN -1 * amount
+                                ELSE 0
+                            END AS trans_balance,
+                            CASE
+                                WHEN operation = 'mint' OR operation = 'transfer_receive' THEN amount
+                                WHEN operation = 'transfer_send' THEN -1 * amount
+                                ELSE 0
+                            END AS total_balance
+                        FROM inserts
+                    ),
+                    grouped_balance_changes AS (
+                        SELECT ticker, address, SUM(avail_balance) AS avail_balance, SUM(trans_balance) AS trans_balance,
+                            SUM(total_balance) AS total_balance
+                        FROM balance_changes
+                        GROUP BY ticker, address
+                    )
+                    INSERT INTO balances (ticker, address, avail_balance, trans_balance, total_balance)
+                    (SELECT ticker, address, avail_balance, trans_balance, total_balance FROM grouped_balance_changes)
+                    ON CONFLICT (ticker, address) DO UPDATE SET
+                        avail_balance = balances.avail_balance + EXCLUDED.avail_balance,
+                        trans_balance = balances.trans_balance + EXCLUDED.trans_balance,
+                        total_balance = balances.total_balance + EXCLUDED.total_balance
+                    ", utils::multi_row_query_param_str(chunk.len(), 15)),
                 &params,
             )
             .await
@@ -196,8 +235,8 @@ pub async fn update_operation_counts<T: GenericClient>(
     client
         .query(
             &format!(
-                "INSERT INTO counts_by_mime_type (mime_type, count) VALUES {}
-                ON CONFLICT (mime_type) DO UPDATE SET count = counts_by_mime_type.count + EXCLUDED.count",
+                "INSERT INTO counts_by_operation (operation, count) VALUES {}
+                ON CONFLICT (operation) DO UPDATE SET count = counts_by_operation.count + EXCLUDED.count",
                 utils::multi_row_query_param_str(counts.len(), 2)
             ),
             &params,
@@ -216,12 +255,14 @@ pub async fn update_address_operation_counts<T: GenericClient>(
     }
     for chunk in counts.keys().collect::<Vec<&String>>().chunks(500) {
         let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        let mut insert_rows = 0;
         for address in chunk {
             let map = counts.get(*address).unwrap();
             for (operation, value) in map {
                 params.push(*address);
                 params.push(operation);
                 params.push(value);
+                insert_rows += 1;
             }
         }
         client
@@ -229,7 +270,7 @@ pub async fn update_address_operation_counts<T: GenericClient>(
                 &format!(
                     "INSERT INTO counts_by_address_operation (address, operation, count) VALUES {}
                     ON CONFLICT (address, operation) DO UPDATE SET count = counts_by_address_operation.count + EXCLUDED.count",
-                    utils::multi_row_query_param_str(counts.len(), 3)
+                    utils::multi_row_query_param_str(insert_rows, 3)
                 ),
                 &params,
             )
@@ -247,23 +288,26 @@ pub async fn update_token_operation_counts<T: GenericClient>(
         return Ok(());
     }
     for chunk in counts.keys().collect::<Vec<&String>>().chunks(500) {
-        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        let mut converted = HashMap::new();
         for tick in chunk {
-            let value = counts.get(*tick).unwrap();
+            converted.insert(*tick, counts.get(*tick).unwrap().to_string());
+        }
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for (tick, value) in converted.iter() {
             params.push(*tick);
             params.push(value);
         }
         client
             .query(
                 &format!(
-                    "WITH changes (tick, tx_count) AS (VALUES {})
+                    "WITH changes (ticker, tx_count) AS (VALUES {})
                     UPDATE tokens SET tx_count = (
                         SELECT tokens.tx_count + c.tx_count::int
                         FROM changes AS c
-                        WHERE c.tick = tokens.tick
+                        WHERE c.ticker = tokens.ticker
                     )
-                    WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
-                    utils::multi_row_query_param_str(counts.len(), 2)
+                    WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.ticker = tokens.ticker)",
+                    utils::multi_row_query_param_str(chunk.len(), 2)
                 ),
                 &params,
             )
@@ -281,67 +325,26 @@ pub async fn update_token_minted_supplies<T: GenericClient>(
         return Ok(());
     }
     for chunk in supplies.keys().collect::<Vec<&String>>().chunks(500) {
-        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        let mut converted = HashMap::new();
         for tick in chunk {
-            let value = supplies.get(*tick).unwrap();
+            converted.insert(*tick, supplies.get(*tick).unwrap().0.to_string());
+        }
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for (tick, value) in converted.iter() {
             params.push(*tick);
             params.push(value);
         }
         client
             .query(
                 &format!(
-                    "WITH changes (tick, minted_supply) AS (VALUES {})
+                    "WITH changes (ticker, minted_supply) AS (VALUES {})
                     UPDATE tokens SET minted_supply = (
                         SELECT tokens.minted_supply + c.minted_supply::numeric
                         FROM changes AS c
-                        WHERE c.tick = tokens.tick
+                        WHERE c.ticker = tokens.ticker
                     )
-                    WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
-                    utils::multi_row_query_param_str(supplies.len(), 2)
-                ),
-                &params,
-            )
-            .await
-            .map_err(|e| format!("update_token_minted_supplies: {e}"))?;
-    }
-    Ok(())
-}
-
-pub async fn update_address_balances<T: GenericClient>(
-    balance_changes: &HashMap<
-        String,
-        HashMap<String, (PgNumericU128, PgNumericU128, PgNumericU128)>,
-    >,
-    client: &T,
-) -> Result<(), String> {
-    if balance_changes.len() == 0 {
-        return Ok(());
-    }
-    let mut flat_values = vec![];
-    for (address, map) in balance_changes {
-        for (ticker, (avail, trans, total)) in map {
-            flat_values.push((address, ticker, avail, trans, total));
-        }
-    }
-    for chunk in flat_values.chunks(500) {
-        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
-        for row in chunk {
-            params.push(row.0);
-            params.push(row.1);
-            params.push(row.2);
-            params.push(row.3);
-            params.push(row.4);
-        }
-        client
-            .query(
-                &format!(
-                    "INSERT INTO balances (address, ticker, avail_balance, trans_balance, total_balance)
-                    VALUES {}
-                    ON CONFLICT (ticker, address) DO UPDATE SET
-                        avail_balance = balances.avail_balance + EXCLUDED.avail_balance,
-                        trans_balance = balances.trans_balance + EXCLUDED.trans_balance,
-                        total_balance = balances.total_balance + EXCLUDED.total_balance",
-                    utils::multi_row_query_param_str(chunk.len(), 5)
+                    WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.ticker = tokens.ticker)",
+                    utils::multi_row_query_param_str(chunk.len(), 2)
                 ),
                 &params,
             )

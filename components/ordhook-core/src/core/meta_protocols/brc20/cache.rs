@@ -38,12 +38,6 @@ pub struct Brc20DbCache {
     address_operation_counts: HashMap<String, HashMap<String, i32>>,
     token_operation_counts: HashMap<String, i32>,
     token_minted_supplies: HashMap<String, PgNumericU128>,
-    avail_balance_increases: HashMap<String, HashMap<String, PgNumericU128>>,
-    avail_balance_decreases: HashMap<String, HashMap<String, PgNumericU128>>,
-    trans_balance_increases: HashMap<String, HashMap<String, PgNumericU128>>,
-    trans_balance_decreases: HashMap<String, HashMap<String, PgNumericU128>>,
-    total_balance_increases: HashMap<String, HashMap<String, PgNumericU128>>,
-    total_balance_decreases: HashMap<String, HashMap<String, PgNumericU128>>,
 }
 
 impl Brc20DbCache {
@@ -55,12 +49,6 @@ impl Brc20DbCache {
             address_operation_counts: HashMap::new(),
             token_operation_counts: HashMap::new(),
             token_minted_supplies: HashMap::new(),
-            avail_balance_increases: HashMap::new(),
-            avail_balance_decreases: HashMap::new(),
-            trans_balance_increases: HashMap::new(),
-            trans_balance_decreases: HashMap::new(),
-            total_balance_increases: HashMap::new(),
-            total_balance_decreases: HashMap::new(),
         }
     }
 
@@ -77,8 +65,6 @@ impl Brc20DbCache {
         self.token_operation_counts.clear();
         brc20_pg::update_token_minted_supplies(&self.token_minted_supplies, db_tx).await?;
         self.token_minted_supplies.clear();
-        // brc20_pg::update_address_balances(&self.address_balance_changes, db_tx).await?;
-        // self.address_balance_changes.clear();
         Ok(())
     }
 }
@@ -211,13 +197,13 @@ impl Brc20MemoryCache {
             max: PgNumericU128(data.max),
             address: data.address.clone(),
             self_mint: data.self_mint,
-            block_hash: block_identifier.hash.clone(),
+            block_hash: block_identifier.hash[2..].to_string(),
             tx_id: tx_identifier.hash.clone(),
             tx_index: PgNumericU64(tx_index),
             limit: PgNumericU128(data.lim),
             decimals: PgSmallIntU8(data.dec),
             minted_supply: PgNumericU128(0),
-            tx_count: PgBigIntU32(0),
+            tx_count: 0,
             timestamp: PgBigIntU32(timestamp),
         };
         self.tokens.put(token.ticker.clone(), token.clone());
@@ -235,7 +221,7 @@ impl Brc20MemoryCache {
             inscription_number: reveal.inscription_number.jubilee,
             ordinal_number: PgNumericU64(reveal.ordinal_number),
             block_height: PgNumericU64(block_identifier.index),
-            block_hash: block_identifier.hash.clone(),
+            block_hash: block_identifier.hash[2..].to_string(),
             tx_id: tx_identifier.hash.clone(),
             tx_index: PgNumericU64(tx_index),
             output,
@@ -288,7 +274,7 @@ impl Brc20MemoryCache {
             address: data.address.clone(),
             amount: PgNumericU128(data.amt),
             operation,
-            block_hash: block_identifier.hash.clone(),
+            block_hash: block_identifier.hash[2..].to_string(),
             tx_id: tx_identifier.hash.clone(),
             output,
             offset: PgNumericU64(offset.unwrap()),
@@ -301,13 +287,6 @@ impl Brc20MemoryCache {
             .entry(data.tick.clone())
             .and_modify(|c| *c += data.amt)
             .or_insert(PgNumericU128(data.amt));
-        self.update_address_token_balance(
-            data.address.clone(),
-            data.tick.clone(),
-            (data.amt, true),
-            (0, true),
-            (data.amt, true),
-        );
         self.ignore_inscription(reveal.ordinal_number);
         Ok(())
     }
@@ -347,7 +326,7 @@ impl Brc20MemoryCache {
             address: data.address.clone(),
             amount: PgNumericU128(data.amt),
             operation,
-            block_hash: block_identifier.hash.clone(),
+            block_hash: block_identifier.hash[2..].to_string(),
             tx_id: tx_identifier.hash.clone(),
             output,
             offset: PgNumericU64(offset.unwrap()),
@@ -355,13 +334,6 @@ impl Brc20MemoryCache {
             to_address: None,
         };
         self.increase_token_operation_count(data.tick.clone(), 1);
-        self.update_address_token_balance(
-            data.address.clone(),
-            data.tick.clone(),
-            (data.amt, false),
-            (data.amt, true),
-            (0, true),
-        );
         self.unsent_transfers
             .put(reveal.ordinal_number, ledger_row.clone());
         self.db_cache.operations.push(ledger_row);
@@ -404,7 +376,7 @@ impl Brc20MemoryCache {
             address: data.sender_address.clone(),
             amount: PgNumericU128(data.amt),
             operation: operation.clone(),
-            block_hash: block_identifier.hash.clone(),
+            block_hash: block_identifier.hash[2..].to_string(),
             tx_id: tx_identifier.hash.clone(),
             output: output.clone(),
             offset: PgNumericU64(offset.unwrap()),
@@ -421,7 +393,7 @@ impl Brc20MemoryCache {
             address: data.receiver_address.clone(),
             amount: PgNumericU128(data.amt),
             operation: "transfer_receive".to_string(),
-            block_hash: block_identifier.hash.clone(),
+            block_hash: block_identifier.hash[2..].to_string(),
             tx_id: tx_identifier.hash.clone(),
             output,
             offset: PgNumericU64(offset.unwrap()),
@@ -429,20 +401,6 @@ impl Brc20MemoryCache {
             to_address: None,
         });
         self.increase_token_operation_count(data.tick.clone(), 1);
-        self.update_address_token_balance(
-            data.sender_address.clone(),
-            data.tick.clone(),
-            (0, true),
-            (data.amt, false),
-            (data.amt, false),
-        );
-        self.update_address_token_balance(
-            data.receiver_address.clone(),
-            data.tick.clone(),
-            (data.amt, true),
-            (0, true),
-            (data.amt, true),
-        );
         let balance = self
             .get_token_address_avail_balance(&data.tick, &data.receiver_address, db_tx)
             .await?
@@ -487,58 +445,6 @@ impl Brc20MemoryCache {
             .entry(tick)
             .and_modify(|c| *c += delta)
             .or_insert(delta);
-    }
-
-    fn update_address_token_balance(
-        &mut self,
-        address: String,
-        tick: String,
-        // (amount: u128, is_increase: bool)
-        avail_balance: (u128, bool),
-        trans_balance: (u128, bool),
-        total_balance: (u128, bool),
-    ) {
-
-        // if avail_balance.0 > 0 {
-        //     if avail_balance.1 {
-        //         self.db_cache
-        //             .avail_balance_increases
-        //             .entry(address)
-        //             .and_modify(|c| *c += avail_balance.1)
-        //             .or_insert(avail_balance);
-        //     }
-        // }
-        // self.db_cache
-        //     .address_balance_changes
-        //     .entry(address)
-        //     .and_modify(|c| {
-        //         (*c).entry(tick.clone())
-        //             .and_modify(|c| {
-        //                 if avail_balance.1 {
-        //                     (*c).0 += avail_balance.0;
-        //                 } else {
-        //                     (*c).0 -= avail_balance.0;
-        //                 }
-        //                 if trans_balance.1 {
-        //                     (*c).0 += trans_balance.0;
-        //                 } else {
-        //                     (*c).0 -= trans_balance.0;
-        //                 }
-        //                 if total_balance.1 {
-        //                     (*c).0 += total_balance.0;
-        //                 } else {
-        //                     (*c).0 -= total_balance.0;
-        //                 }
-        //             })
-        //             .or_insert((
-        //                 PgNumericU128(avail_balance.0),
-        //                 PgNumericU128(trans_balance.0),
-        //                 PgNumericU128(total_balance.0),
-        //             ));
-        //     })
-        //     .or_insert(hashmap! {
-        //         tick => (PgNumericU128(avail_balance.0), PgNumericU128(trans_balance.0), PgNumericU128(total_balance.0))
-        //     });
     }
 
     async fn get_unsent_transfer_row(

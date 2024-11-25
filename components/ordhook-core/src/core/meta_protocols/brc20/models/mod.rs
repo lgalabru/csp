@@ -16,7 +16,7 @@ pub struct DbToken {
     pub decimals: PgSmallIntU8,
     pub self_mint: bool,
     pub minted_supply: PgNumericU128,
-    pub tx_count: PgBigIntU32,
+    pub tx_count: i32,
     pub timestamp: PgBigIntU32,
 }
 
@@ -26,7 +26,7 @@ impl DbToken {
             ticker: row.get("ticker"),
             display_ticker: row.get("display_ticker"),
             inscription_id: row.get("inscription_id"),
-            inscription_number: row.get("ticker"),
+            inscription_number: row.get("inscription_number"),
             block_height: row.get("block_height"),
             block_hash: row.get("block_hash"),
             tx_id: row.get("tx_id"),

@@ -525,8 +525,8 @@ async fn update_mime_type_counts<T: GenericClient>(
     client
         .query(
             &format!(
-                "INSERT INTO counts_by_operation (operation, count) VALUES {}
-                ON CONFLICT (operation) DO UPDATE SET count = counts_by_operation.count + EXCLUDED.count",
+                "INSERT INTO counts_by_mime_type (mime_type, count) VALUES {}
+                ON CONFLICT (mime_type) DO UPDATE SET count = counts_by_mime_type.count + EXCLUDED.count",
                 utils::multi_row_query_param_str(counts.len(), 2)
             ),
             &params,
