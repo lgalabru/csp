@@ -74,30 +74,4 @@ impl DbInscription {
             timestamp: PgBigIntU32(timestamp),
         }
     }
-    //     pub fn from_pg_row(row: &Row) -> Self {
-    //         DbInscription {
-    //             inscription_id: row.get("inscription_id"),
-    //             ordinal_number: row.get("ordinal_number"),
-    //             number: row.get("number"),
-    //             classic_number: row.get("classic_number"),
-    //             block_height: row.get("block_height"),
-    //             block_hash: row.get("block_hash"),
-    //             tx_index: row.get("tx_index"),
-    //             address: row.get("address"),
-    //             mime_type: row.get("mime_type"),
-    //             content_type: row.get("content_type"),
-    //             content_length: row.get("content_length"),
-    //             content: row.get("content"),
-    //             fee: todo!(),
-    //             curse_type: todo!(),
-    //             recursive: todo!(),
-    //             input_index: todo!(),
-    //             pointer: todo!(),
-    //             metadata: todo!(),
-    //             metaprotocol: todo!(),
-    //             parent: todo!(),
-    //             delegate: todo!(),
-    //             timestamp: todo!(),
-    //         }
-    //     }
 }

@@ -37,7 +37,7 @@ impl DbLocation {
             ordinal_number: PgNumericU64(reveal.ordinal_number),
             block_height: PgNumericU64(block_identifier.index),
             tx_index: PgBigIntU32(tx_index as u32),
-            tx_id: tx_identifier.hash.clone(),
+            tx_id: tx_identifier.hash[2..].to_string(),
             block_hash: block_identifier.hash[2..].to_string(),
             address: reveal.inscriber_address.clone(),
             output,
@@ -74,7 +74,7 @@ impl DbLocation {
             ordinal_number: PgNumericU64(transfer.ordinal_number),
             block_height: PgNumericU64(block_identifier.index),
             tx_index: PgBigIntU32(tx_index as u32),
-            tx_id: tx_identifier.hash.clone(),
+            tx_id: tx_identifier.hash[2..].to_string(),
             block_hash: block_identifier.hash[2..].to_string(),
             address: match &transfer.destination {
                 OrdinalInscriptionTransferDestination::Transferred(address) => {
