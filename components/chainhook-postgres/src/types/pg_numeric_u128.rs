@@ -2,7 +2,7 @@ use std::{
     cmp::Ordering,
     error::Error,
     io::{Cursor, Read},
-    ops::AddAssign,
+    ops::{AddAssign, SubAssign},
 };
 
 use bytes::{BufMut, BytesMut};
@@ -105,6 +105,18 @@ impl AddAssign for PgNumericU128 {
 impl AddAssign<u128> for PgNumericU128 {
     fn add_assign(&mut self, other: u128) {
         self.0 += other;
+    }
+}
+
+impl SubAssign for PgNumericU128 {
+    fn sub_assign(&mut self, other: Self) {
+        self.0 -= other.0;
+    }
+}
+
+impl SubAssign<u128> for PgNumericU128 {
+    fn sub_assign(&mut self, other: u128) {
+        self.0 -= other;
     }
 }
 

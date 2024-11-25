@@ -214,25 +214,28 @@ pub async fn update_address_operation_counts<T: GenericClient>(
     if counts.len() == 0 {
         return Ok(());
     }
-    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
-    for (address, map) in counts {
-        for (operation, value) in map {
-            params.push(address);
-            params.push(operation);
-            params.push(value);
+    for chunk in counts.keys().collect::<Vec<&String>>().chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for address in chunk {
+            let map = counts.get(*address).unwrap();
+            for (operation, value) in map {
+                params.push(*address);
+                params.push(operation);
+                params.push(value);
+            }
         }
+        client
+            .query(
+                &format!(
+                    "INSERT INTO counts_by_address_operation (address, operation, count) VALUES {}
+                    ON CONFLICT (address, operation) DO UPDATE SET count = counts_by_address_operation.count + EXCLUDED.count",
+                    utils::multi_row_query_param_str(counts.len(), 3)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("update_address_operation_counts: {e}"))?;
     }
-    client
-        .query(
-            &format!(
-                "INSERT INTO counts_by_address_operation (address, operation, count) VALUES {}
-                ON CONFLICT (address, operation) DO UPDATE SET count = counts_by_address_operation.count + EXCLUDED.count",
-                utils::multi_row_query_param_str(counts.len(), 3)
-            ),
-            &params,
-        )
-        .await
-        .map_err(|e| format!("update_address_operation_counts: {e}"))?;
     Ok(())
 }
 
@@ -243,27 +246,30 @@ pub async fn update_token_operation_counts<T: GenericClient>(
     if counts.len() == 0 {
         return Ok(());
     }
-    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
-    for (tick, value) in counts {
-        params.push(tick);
-        params.push(value);
+    for chunk in counts.keys().collect::<Vec<&String>>().chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for tick in chunk {
+            let value = counts.get(*tick).unwrap();
+            params.push(*tick);
+            params.push(value);
+        }
+        client
+            .query(
+                &format!(
+                    "WITH changes (tick, tx_count) AS (VALUES {})
+                    UPDATE tokens SET tx_count = (
+                        SELECT tokens.tx_count + c.tx_count::int
+                        FROM changes AS c
+                        WHERE c.tick = tokens.tick
+                    )
+                    WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
+                    utils::multi_row_query_param_str(counts.len(), 2)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("update_token_operation_counts: {e}"))?;
     }
-    client
-        .query(
-            &format!(
-                "WITH changes (tick, tx_count) AS (VALUES {})
-                UPDATE tokens SET tx_count = (
-                    SELECT tokens.tx_count + c.tx_count::int
-                    FROM changes AS c
-                    WHERE c.tick = tokens.tick
-                )
-                WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
-                utils::multi_row_query_param_str(counts.len(), 2)
-            ),
-            &params,
-        )
-        .await
-        .map_err(|e| format!("update_token_operation_counts: {e}"))?;
     Ok(())
 }
 
@@ -274,27 +280,74 @@ pub async fn update_token_minted_supplies<T: GenericClient>(
     if supplies.len() == 0 {
         return Ok(());
     }
-    let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
-    for (tick, value) in supplies {
-        params.push(tick);
-        params.push(value);
+    for chunk in supplies.keys().collect::<Vec<&String>>().chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for tick in chunk {
+            let value = supplies.get(*tick).unwrap();
+            params.push(*tick);
+            params.push(value);
+        }
+        client
+            .query(
+                &format!(
+                    "WITH changes (tick, minted_supply) AS (VALUES {})
+                    UPDATE tokens SET minted_supply = (
+                        SELECT tokens.minted_supply + c.minted_supply::numeric
+                        FROM changes AS c
+                        WHERE c.tick = tokens.tick
+                    )
+                    WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
+                    utils::multi_row_query_param_str(supplies.len(), 2)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("update_token_minted_supplies: {e}"))?;
     }
-    client
-        .query(
-            &format!(
-                "WITH changes (tick, minted_supply) AS (VALUES {})
-                UPDATE tokens SET minted_supply = (
-                    SELECT tokens.minted_supply + c.minted_supply::numeric
-                    FROM changes AS c
-                    WHERE c.tick = tokens.tick
-                )
-                WHERE EXISTS (SELECT 1 FROM changes AS c WHERE c.tick = tokens.tick)",
-                utils::multi_row_query_param_str(supplies.len(), 2)
-            ),
-            &params,
-        )
-        .await
-        .map_err(|e| format!("update_token_minted_supplies: {e}"))?;
+    Ok(())
+}
+
+pub async fn update_address_balances<T: GenericClient>(
+    balance_changes: &HashMap<
+        String,
+        HashMap<String, (PgNumericU128, PgNumericU128, PgNumericU128)>,
+    >,
+    client: &T,
+) -> Result<(), String> {
+    if balance_changes.len() == 0 {
+        return Ok(());
+    }
+    let mut flat_values = vec![];
+    for (address, map) in balance_changes {
+        for (ticker, (avail, trans, total)) in map {
+            flat_values.push((address, ticker, avail, trans, total));
+        }
+    }
+    for chunk in flat_values.chunks(500) {
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        for row in chunk {
+            params.push(row.0);
+            params.push(row.1);
+            params.push(row.2);
+            params.push(row.3);
+            params.push(row.4);
+        }
+        client
+            .query(
+                &format!(
+                    "INSERT INTO balances (address, ticker, avail_balance, trans_balance, total_balance)
+                    VALUES {}
+                    ON CONFLICT (ticker, address) DO UPDATE SET
+                        avail_balance = balances.avail_balance + EXCLUDED.avail_balance,
+                        trans_balance = balances.trans_balance + EXCLUDED.trans_balance,
+                        total_balance = balances.total_balance + EXCLUDED.total_balance",
+                    utils::multi_row_query_param_str(chunk.len(), 5)
+                ),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("update_token_minted_supplies: {e}"))?;
+    }
     Ok(())
 }
 
