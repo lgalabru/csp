@@ -443,6 +443,102 @@ pub async fn rollback_block_operations<T: GenericClient>(
     block_height: u64,
     client: &T,
 ) -> Result<(), String> {
-    //
+    client
+        .execute(
+            "WITH ops AS (SELECT * FROM operations WHERE block_height = $1),
+            balance_changes AS (
+                SELECT ticker, address,
+                    CASE
+                        WHEN operation = 'mint' OR operation = 'transfer_receive' THEN amount
+                        WHEN operation = 'transfer' THEN -1 * amount
+                        ELSE 0
+                    END AS avail_balance,
+                    CASE
+                        WHEN operation = 'transfer' THEN amount
+                        WHEN operation = 'transfer_send' THEN -1 * amount
+                        ELSE 0
+                    END AS trans_balance,
+                    CASE
+                        WHEN operation = 'mint' OR operation = 'transfer_receive' THEN amount
+                        WHEN operation = 'transfer_send' THEN -1 * amount
+                        ELSE 0
+                    END AS total_balance
+                FROM ops
+            ),
+            grouped_balance_changes AS (
+                SELECT ticker, address, SUM(avail_balance) AS avail_balance, SUM(trans_balance) AS trans_balance,
+                    SUM(total_balance) AS total_balance
+                FROM balance_changes
+                GROUP BY ticker, address
+            ),
+            balance_updates AS (
+                UPDATE balances SET avail_balance = (
+                    SELECT balances.avail_balance - SUM(grouped_balance_changes.avail_balance)
+                    FROM grouped_balance_changes
+                    WHERE grouped_balance_changes.address = balances.address AND grouped_balance_changes.ticker = balances.ticker
+                ), trans_balance = (
+                    SELECT balances.trans_balance - SUM(grouped_balance_changes.trans_balance)
+                    FROM grouped_balance_changes
+                    WHERE grouped_balance_changes.address = balances.address AND grouped_balance_changes.ticker = balances.ticker
+                ), total_balance = (
+                    SELECT balances.total_balance - SUM(grouped_balance_changes.total_balance)
+                    FROM grouped_balance_changes
+                    WHERE grouped_balance_changes.address = balances.address AND grouped_balance_changes.ticker = balances.ticker
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM grouped_balance_changes
+                    WHERE grouped_balance_changes.ticker = balances.ticker AND grouped_balance_changes.address = balances.address
+                )
+            ),
+            token_mint_updates AS (
+                UPDATE tokens SET minted_supply = (
+                    SELECT tokens.minted_supply - SUM(ops.amount)
+                    FROM ops
+                    WHERE ops.ticker = tokens.ticker AND ops.operation = 'mint'
+                    GROUP BY ops.ticker
+                )
+                WHERE EXISTS (SELECT 1 FROM ops WHERE ops.ticker = tokens.ticker)
+            ),
+            token_tx_count_updates AS (
+                UPDATE tokens SET tx_count = (
+                    SELECT tokens.tx_count - COUNT(*)
+                    FROM ops
+                    WHERE ops.ticker = tokens.ticker AND ops.operation <> 'transfer_receive'
+                    GROUP BY ops.ticker
+                )
+                WHERE EXISTS (SELECT 1 FROM ops WHERE ops.ticker = tokens.ticker)
+            ),
+            address_op_count_updates AS (
+                UPDATE counts_by_address_operation SET count = (
+                    SELECT counts_by_address_operation.count - COUNT(*)
+                    FROM ops
+                    WHERE ops.address = counts_by_address_operation.address
+                        AND ops.operation = counts_by_address_operation.operation
+                    GROUP BY ops.address, ops.operation
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM ops
+                    WHERE ops.address = counts_by_address_operation.address
+                        AND ops.operation = counts_by_address_operation.operation
+                )
+            ),
+            op_count_updates AS (
+                UPDATE counts_by_operation SET count = (
+                    SELECT counts_by_operation.count - COUNT(*)
+                    FROM ops
+                    WHERE ops.operation = counts_by_operation.operation
+                    GROUP BY ops.operation
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM ops
+                    WHERE ops.operation = counts_by_operation.operation
+                )
+            ),
+            token_deletes AS (DELETE FROM tokens WHERE block_height = $1)
+            DELETE FROM operations WHERE block_height = $1",
+            &[&PgNumericU64(block_height)],
+        )
+        .await
+        .map_err(|e| format!("rollback_block_operations: {e}"))?;
     Ok(())
 }

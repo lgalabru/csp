@@ -325,6 +325,7 @@ pub async fn rollback_block(
                 "Rolled back BRC-20 operations at block #{block_height}"
             );
         }
+        ordinals_pg::update_chain_tip(block_height - 1, client).await?;
         Ok(())
     })
     .await?;

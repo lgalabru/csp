@@ -826,6 +826,67 @@ pub async fn insert_block<T: GenericClient>(
 }
 
 pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
-    //
+    let locations = client
+        .query(
+            "SELECT * FROM locations WHERE block_height = $1",
+            &[&PgNumericU64(block_height)],
+        )
+        .await
+        .map_err(|e| format!("rollback_block (locations): {e}"))?;
+    for row in locations.iter() {
+        //
+    }
+    client
+        .execute(
+            "WITH locs AS (SELECT * FROM locations WHERE block_height = $1),
+            transfer_deletes AS (DELETE FROM inscription_transfers WHERE block_height = $1),
+            inscription_deletes AS (
+                DELETE FROM inscriptions WHERE block_height = $1 RETURNING mime_type, classic_number, address, recursive
+            ),
+            inscription_delete_types AS (
+                SELECT CASE WHEN classic_number < 0 THEN 'cursed' ELSE 'blessed' END AS type, COUNT(*) AS count
+                FROM inscription_deletes
+            ),
+            counts_by_block_deletes AS (DELETE FROM counts_by_block WHERE block_height = $1),
+            type_count_updates AS (
+                UPDATE counts_by_type SET count = (
+                    SELECT counts_by_type.count - count
+                    FROM inscription_delete_types
+                    WHERE inscription_delete_types.type = counts_by_type.type
+                )
+                WHERE EXISTS (SELECT 1 FROM inscription_delete_types WHERE inscription_delete_types.type = counts_by_type.type)
+            ),
+            mime_type_count_updates AS (
+                UPDATE counts_by_mime_type SET count = (
+                    SELECT counts_by_mime_type.count - COUNT(*)
+                    FROM inscription_deletes
+                    WHERE inscription_deletes.mime_type = counts_by_mime_type.mime_type
+                    GROUP BY inscription_deletes.mime_type
+                )
+                WHERE EXISTS (SELECT 1 FROM inscription_deletes WHERE inscription_deletes.mime_type = counts_by_mime_type.mime_type)
+            ),
+            genesis_address_count_updates AS (
+                UPDATE counts_by_genesis_address SET count = (
+                    SELECT counts_by_genesis_address.count - COUNT(*)
+                    FROM inscription_deletes
+                    WHERE inscription_deletes.address = counts_by_genesis_address.address
+                    GROUP BY inscription_deletes.address
+                )
+                WHERE EXISTS (SELECT 1 FROM inscription_deletes WHERE inscription_deletes.address = counts_by_genesis_address.address)
+            ),
+            recursive_count_updates AS (
+                UPDATE counts_by_recursive SET count = (
+                    SELECT counts_by_recursive.count - COUNT(*)
+                    FROM inscription_deletes
+                    WHERE inscription_deletes.recursive = counts_by_recursive.recursive
+                    GROUP BY inscription_deletes.recursive
+                )
+                WHERE EXISTS (SELECT 1 FROM inscription_deletes WHERE inscription_deletes.recursive = counts_by_recursive.recursive)
+            )
+            DELETE FROM locations WHERE block_height = $1",
+            &[&PgNumericU64(block_height)],
+        )
+        .await
+        .map_err(|e| format!("rollback_block: {e}"))?;
     Ok(())
 }
