@@ -542,3 +542,409 @@ pub async fn rollback_block_operations<T: GenericClient>(
         .map_err(|e| format!("rollback_block_operations: {e}"))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use chainhook_postgres::{
+        deadpool_postgres::GenericClient,
+        types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8},
+        with_pg_transaction,
+    };
+    use chainhook_sdk::types::{
+        BlockIdentifier, OrdinalInscriptionTransferDestination, TransactionIdentifier,
+    };
+
+    use crate::{
+        core::meta_protocols::brc20::{
+            brc20_pg,
+            cache::Brc20MemoryCache,
+            models::DbToken,
+            test_utils::{Brc20RevealBuilder, Brc20TransferBuilder},
+            verifier::{
+                VerifiedBrc20BalanceData, VerifiedBrc20TokenDeployData, VerifiedBrc20TransferData,
+            },
+        },
+        db::{pg_test_clear_db, pg_test_connection, pg_test_connection_pool},
+    };
+
+    async fn get_counts_by_operation<T: GenericClient>(client: &T) -> (i32, i32, i32, i32) {
+        let row = client
+            .query_opt(
+                "SELECT
+                COALESCE((SELECT count FROM counts_by_operation WHERE operation = 'deploy'), 0) AS deploy,
+                COALESCE((SELECT count FROM counts_by_operation WHERE operation = 'mint'), 0) AS mint,
+                COALESCE((SELECT count FROM counts_by_operation WHERE operation = 'transfer'), 0) AS transfer,
+                COALESCE((SELECT count FROM counts_by_operation WHERE operation = 'transfer_send'), 0) AS transfer_send",
+                &[],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let deploy: i32 = row.get("deploy");
+        let mint: i32 = row.get("mint");
+        let transfer: i32 = row.get("transfer");
+        let transfer_send: i32 = row.get("transfer_send");
+        (deploy, mint, transfer, transfer_send)
+    }
+
+    async fn get_counts_by_address_operation<T: GenericClient>(
+        address: &str,
+        client: &T,
+    ) -> (i32, i32, i32, i32) {
+        let row = client
+            .query_opt(
+                "SELECT
+                COALESCE((SELECT count FROM counts_by_address_operation WHERE address = $1 AND operation = 'deploy'), 0) AS deploy,
+                COALESCE((SELECT count FROM counts_by_address_operation WHERE address = $1 AND operation = 'mint'), 0) AS mint,
+                COALESCE((SELECT count FROM counts_by_address_operation WHERE address = $1 AND operation = 'transfer'), 0) AS transfer,
+                COALESCE((SELECT count FROM counts_by_address_operation WHERE address = $1 AND operation = 'transfer_send'), 0) AS transfer_send",
+                &[&address],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let deploy: i32 = row.get("deploy");
+        let mint: i32 = row.get("mint");
+        let transfer: i32 = row.get("transfer");
+        let transfer_send: i32 = row.get("transfer_send");
+        (deploy, mint, transfer, transfer_send)
+    }
+
+    async fn get_address_token_balance<T: GenericClient>(
+        address: &str,
+        ticker: &str,
+        client: &T,
+    ) -> Option<(PgNumericU128, PgNumericU128, PgNumericU128)> {
+        let row = client
+            .query_opt(
+                "SELECT avail_balance, trans_balance, total_balance FROM balances WHERE address = $1 AND ticker = $2",
+                &[&address, &ticker],
+            )
+            .await
+            .unwrap();
+        let Some(row) = row else {
+            return None;
+        };
+        let avail_balance: PgNumericU128 = row.get("avail_balance");
+        let trans_balance: PgNumericU128 = row.get("trans_balance");
+        let total_balance: PgNumericU128 = row.get("total_balance");
+        Some((avail_balance, trans_balance, total_balance))
+    }
+
+    #[tokio::test]
+    async fn test_apply_and_rollback() {
+        let mut pg_client = pg_test_connection().await;
+        let _ = brc20_pg::migrate(&mut pg_client).await;
+        let _ = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+            let mut cache = Brc20MemoryCache::new(100);
+
+            // Deploy
+            {
+                cache.insert_token_deploy(
+                    &VerifiedBrc20TokenDeployData {
+                        tick: "pepe".to_string(),
+                        display_tick: "PEPE".to_string(),
+                        max: 21000000_000000000000000000,
+                        lim: 1000_000000000000000000,
+                        dec: 18,
+                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                        self_mint: false,
+                    },
+                    &Brc20RevealBuilder::new().inscription_number(0).build(),
+                    &BlockIdentifier {
+                        index: 800000,
+                        hash: "0x00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                            .to_string(),
+                    },
+                    0,
+                    &TransactionIdentifier {
+                        hash: "0x8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d391"
+                            .to_string(),
+                    },
+                    0,
+                )?;
+                cache.db_cache.flush(client).await?;
+                let db_token = brc20_pg::get_token(&"pepe".to_string(), client)
+                    .await?
+                    .unwrap();
+                assert_eq!(
+                    db_token,
+                    DbToken {
+                        ticker: "pepe".to_string(),
+                        display_ticker: "PEPE".to_string(),
+                        inscription_id:
+                            "9bb2314d666ae0b1db8161cb373fcc1381681f71445c4e0335aa80ea9c37fcddi0"
+                                .to_string(),
+                        inscription_number: 0,
+                        block_height: PgNumericU64(800000),
+                        block_hash:
+                            "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                                .to_string(),
+                        tx_id: "8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d391"
+                            .to_string(),
+                        tx_index: PgNumericU64(0),
+                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                        max: PgNumericU128(21000000_000000000000000000),
+                        limit: PgNumericU128(1000_000000000000000000),
+                        decimals: PgSmallIntU8(18),
+                        self_mint: false,
+                        minted_supply: PgNumericU128(0),
+                        tx_count: 1,
+                        timestamp: PgBigIntU32(0)
+                    }
+                );
+                assert_eq!((1, 0, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (1, 0, 0, 0),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((PgNumericU128(0), PgNumericU128(0), PgNumericU128(0))),
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+            }
+            // Mint
+            {
+                cache
+                    .insert_token_mint(
+                        &VerifiedBrc20BalanceData {
+                            tick: "pepe".to_string(),
+                            amt: 1000_000000000000000000,
+                            address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                        },
+                        &Brc20RevealBuilder::new().inscription_number(1).build(),
+                        &BlockIdentifier {
+                            index: 800001,
+                            hash:
+                                "0x00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                                    .to_string(),
+                        },
+                        0,
+                        &TransactionIdentifier {
+                            hash:
+                                "0x8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d392"
+                                    .to_string(),
+                        },
+                        0,
+                        client,
+                    )
+                    .await?;
+                cache.db_cache.flush(client).await?;
+                assert_eq!((1, 1, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (1, 1, 0, 0),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((
+                        PgNumericU128(1000_000000000000000000),
+                        PgNumericU128(0),
+                        PgNumericU128(1000_000000000000000000)
+                    )),
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+            }
+            // Transfer
+            {
+                cache
+                    .insert_token_transfer(
+                        &VerifiedBrc20BalanceData {
+                            tick: "pepe".to_string(),
+                            amt: 500_000000000000000000,
+                            address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                        },
+                        &Brc20RevealBuilder::new()
+                            .ordinal_number(700)
+                            .inscription_number(2)
+                            .build(),
+                        &BlockIdentifier {
+                            index: 800002,
+                            hash:
+                                "0x00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                                    .to_string(),
+                        },
+                        0,
+                        &TransactionIdentifier {
+                            hash:
+                                "0x8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d392"
+                                    .to_string(),
+                        },
+                        0,
+                        client,
+                    )
+                    .await?;
+                cache.db_cache.flush(client).await?;
+                assert_eq!((1, 1, 1, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (1, 1, 1, 0),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((
+                        PgNumericU128(500_000000000000000000),
+                        PgNumericU128(500_000000000000000000),
+                        PgNumericU128(1000_000000000000000000)
+                    )),
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+            }
+            // Transfer send
+            {
+                cache
+                    .insert_token_transfer_send(
+                        &VerifiedBrc20TransferData {
+                            tick: "pepe".to_string(),
+                            amt: 500_000000000000000000,
+                            sender_address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                            receiver_address:
+                                "bc1pngjqgeamkmmhlr6ft5yllgdmfllvcvnw5s7ew2ler3rl0z47uaesrj6jte"
+                                    .to_string(),
+                        },
+                        &Brc20TransferBuilder::new()
+                            .ordinal_number(700)
+                            .destination(OrdinalInscriptionTransferDestination::Transferred(
+                                "bc1pngjqgeamkmmhlr6ft5yllgdmfllvcvnw5s7ew2ler3rl0z47uaesrj6jte"
+                                    .to_string(),
+                            ))
+                            .build(),
+                        &BlockIdentifier {
+                            index: 800003,
+                            hash:
+                                "0x00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                                    .to_string(),
+                        },
+                        0,
+                        &TransactionIdentifier {
+                            hash:
+                                "0x8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d392"
+                                    .to_string(),
+                        },
+                        0,
+                        client,
+                    )
+                    .await?;
+                cache.db_cache.flush(client).await?;
+                assert_eq!((1, 1, 1, 1), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (1, 1, 1, 1),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((
+                        PgNumericU128(500_000000000000000000),
+                        PgNumericU128(0),
+                        PgNumericU128(500_000000000000000000)
+                    )),
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((
+                        PgNumericU128(500_000000000000000000),
+                        PgNumericU128(0),
+                        PgNumericU128(500_000000000000000000)
+                    )),
+                    get_address_token_balance(
+                        "bc1pngjqgeamkmmhlr6ft5yllgdmfllvcvnw5s7ew2ler3rl0z47uaesrj6jte",
+                        "pepe",
+                        client
+                    )
+                    .await
+                );
+            }
+
+            // Rollback Transfer send
+            {
+                brc20_pg::rollback_block_operations(800003, client).await?;
+                assert_eq!((1, 1, 1, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (1, 1, 1, 0),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((
+                        PgNumericU128(500_000000000000000000),
+                        PgNumericU128(500_000000000000000000),
+                        PgNumericU128(1000_000000000000000000)
+                    )),
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((PgNumericU128(0), PgNumericU128(0), PgNumericU128(0))),
+                    get_address_token_balance(
+                        "bc1pngjqgeamkmmhlr6ft5yllgdmfllvcvnw5s7ew2ler3rl0z47uaesrj6jte",
+                        "pepe",
+                        client
+                    )
+                    .await
+                );
+            }
+            // Rollback transfer
+            {
+                brc20_pg::rollback_block_operations(800002, client).await?;
+                assert_eq!((1, 1, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (1, 1, 0, 0),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((
+                        PgNumericU128(1000_000000000000000000),
+                        PgNumericU128(0),
+                        PgNumericU128(1000_000000000000000000)
+                    )),
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+            }
+            // Rollback mint
+            {
+                brc20_pg::rollback_block_operations(800001, client).await?;
+                assert_eq!((1, 0, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (1, 0, 0, 0),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    Some((PgNumericU128(0), PgNumericU128(0), PgNumericU128(0))),
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+            }
+            // Rollback deploy
+            {
+                brc20_pg::rollback_block_operations(800000, client).await?;
+                assert_eq!(
+                    None,
+                    brc20_pg::get_token(&"pepe".to_string(), client).await?
+                );
+                assert_eq!((0, 0, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    (0, 0, 0, 0),
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                        .await
+                );
+                assert_eq!(
+                    None,
+                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
+                        .await
+                );
+            }
+
+            Ok(())
+        })
+        .await;
+        pg_test_clear_db(&mut pg_client).await;
+    }
+}
