@@ -4,9 +4,9 @@ pub mod utils;
 use std::future::Future;
 
 use chainhook_sdk::utils::Context;
+pub use deadpool_postgres;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod, Transaction};
 pub use tokio_postgres;
-pub use deadpool_postgres;
 
 use tokio_postgres::{Client, Config, NoTls};
 
@@ -96,7 +96,7 @@ where
 }
 
 /// Connects to postgres and returns an open client.
-pub async fn pg_connect(config: &PgConnectionConfig, ctx: &Context) -> Result<Client, String> {
+pub async fn pg_connect(config: &PgConnectionConfig) -> Result<Client, String> {
     let mut pg_config = Config::new();
     pg_config
         .dbname(&config.dbname)
@@ -108,10 +108,9 @@ pub async fn pg_connect(config: &PgConnectionConfig, ctx: &Context) -> Result<Cl
     }
     match pg_config.connect(NoTls).await {
         Ok((client, connection)) => {
-            let moved_ctx = ctx.clone();
             tokio::spawn(async move {
                 if let Err(e) = connection.await {
-                    moved_ctx.try_log(|l| slog::error!(l, "postgres connection error: {e}"));
+                    println!("postgres connection error: {e}");
                 }
             });
             Ok(client)
@@ -121,12 +120,12 @@ pub async fn pg_connect(config: &PgConnectionConfig, ctx: &Context) -> Result<Cl
 }
 
 /// Connects to postgres with infinite retries and returns an open client.
-pub async fn pg_connect_with_retry(config: &PgConnectionConfig, ctx: &Context) -> Client {
+pub async fn pg_connect_with_retry(config: &PgConnectionConfig) -> Client {
     loop {
-        match pg_connect(config, ctx).await {
+        match pg_connect(config).await {
             Ok(client) => return client,
             Err(e) => {
-                ctx.try_log(|l| slog::error!(l, "error connecting to postgres: {e}"));
+                println!("error connecting to postgres: {e}");
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }

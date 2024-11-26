@@ -97,6 +97,7 @@ impl Brc20RevealBuilder {
 pub struct Brc20TransferBuilder {
     pub ordinal_number: u64,
     pub destination: OrdinalInscriptionTransferDestination,
+    pub satpoint_post_transfer: String,
 }
 
 impl Brc20TransferBuilder {
@@ -106,6 +107,7 @@ impl Brc20TransferBuilder {
             destination: OrdinalInscriptionTransferDestination::Transferred(
                 "bc1pls75sfwullhygkmqap344f5cqf97qz95lvle6fvddm0tpz2l5ffslgq3m0".to_string(),
             ),
+            satpoint_post_transfer: "e45957c419f130cd5c88cdac3eb1caf2d118aee20c17b15b74a611be395a065d:0:0".to_string()
         }
     }
 
@@ -124,7 +126,7 @@ impl Brc20TransferBuilder {
             ordinal_number: self.ordinal_number,
             destination: self.destination,
             satpoint_pre_transfer: "".to_string(),
-            satpoint_post_transfer: "".to_string(),
+            satpoint_post_transfer: self.satpoint_post_transfer,
             post_transfer_output_value: Some(500),
             tx_index: 0,
         }
