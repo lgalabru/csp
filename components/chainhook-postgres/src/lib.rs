@@ -3,7 +3,6 @@ pub mod utils;
 
 use std::future::Future;
 
-use chainhook_sdk::utils::Context;
 pub use deadpool_postgres;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod, Transaction};
 pub use tokio_postgres;
