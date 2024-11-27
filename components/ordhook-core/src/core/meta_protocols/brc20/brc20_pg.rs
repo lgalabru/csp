@@ -4,7 +4,7 @@ use chainhook_postgres::{
     deadpool_postgres::GenericClient,
     tokio_postgres::{types::ToSql, Client},
     types::{PgNumericU128, PgNumericU64},
-    utils,
+    utils, FromPgRow,
 };
 use chainhook_sdk::types::{
     BitcoinBlockData, Brc20BalanceData, Brc20Operation, Brc20TokenDeployData, Brc20TransferData,
@@ -556,7 +556,7 @@ mod test {
 
     use crate::{
         core::meta_protocols::brc20::{
-            brc20_pg,
+            brc20_pg::{self, get_token_minted_supply},
             cache::Brc20MemoryCache,
             models::DbToken,
             test_utils::{Brc20RevealBuilder, Brc20TransferBuilder},
@@ -632,10 +632,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_apply_and_rollback() {
+    async fn test_apply_and_rollback() -> Result<(), String> {
         let mut pg_client = pg_test_connection().await;
-        let _ = brc20_pg::migrate(&mut pg_client).await;
-        let _ = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        brc20_pg::migrate(&mut pg_client).await?;
+        with_pg_transaction(&pg_test_connection_pool(), |client| async move {
             let mut cache = Brc20MemoryCache::new(100);
 
             // Deploy
@@ -737,6 +737,10 @@ mod test {
                     (1, 1, 0, 0),
                     get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
                         .await
+                );
+                assert_eq!(
+                    Some(1000_000000000000000000),
+                    get_token_minted_supply(&"pepe".to_string(), client).await?
                 );
                 assert_eq!(
                     Some((
@@ -917,6 +921,10 @@ mod test {
                         .await
                 );
                 assert_eq!(
+                    Some(0),
+                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                );
+                assert_eq!(
                     Some((PgNumericU128(0), PgNumericU128(0), PgNumericU128(0))),
                     get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
                         .await
@@ -944,7 +952,8 @@ mod test {
 
             Ok(())
         })
-        .await;
+        .await?;
         pg_test_clear_db(&mut pg_client).await;
+        Ok(())
     }
 }

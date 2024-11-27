@@ -243,6 +243,7 @@ async fn insert_inscriptions<T: GenericClient>(
             params.push(&row.classic_number);
             params.push(&row.block_height);
             params.push(&row.block_hash);
+            params.push(&row.tx_id);
             params.push(&row.tx_index);
             params.push(&row.address);
             params.push(&row.mime_type);
@@ -263,11 +264,11 @@ async fn insert_inscriptions<T: GenericClient>(
         client
             .query(
                 &format!("INSERT INTO inscriptions
-                    (inscription_id, ordinal_number, number, classic_number, block_height, block_hash, tx_index, address,
+                    (inscription_id, ordinal_number, number, classic_number, block_height, block_hash, tx_id, tx_index, address,
                     mime_type, content_type, content_length, content, fee, curse_type, recursive, input_index, pointer, metadata,
                     metaprotocol, parent, delegate, timestamp)
                     VALUES {}
-                    ON CONFLICT (number) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 22)),
+                    ON CONFLICT (number) DO NOTHING", utils::multi_row_query_param_str(chunk.len(), 23)),
                 &params,
             )
             .await
@@ -721,6 +722,7 @@ pub async fn insert_block<T: GenericClient>(
                     let mut inscription = DbInscription::from_reveal(
                         reveal,
                         &block.block_identifier,
+                        &tx.transaction_identifier,
                         tx_index,
                         block.timestamp,
                     );
@@ -889,4 +891,269 @@ pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> 
         .await
         .map_err(|e| format!("rollback_block: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use chainhook_postgres::{
+        deadpool_postgres::GenericClient,
+        types::{PgBigIntU32, PgNumericU64},
+        with_pg_transaction, FromPgRow,
+    };
+    use chainhook_sdk::types::{
+        OrdinalInscriptionNumber, OrdinalInscriptionRevealData, OrdinalOperation,
+    };
+
+    use crate::{
+        core::test_builders::{TestBlockBuilder, TestTransactionBuilder},
+        db::{
+            models::{DbCurrentLocation, DbInscription, DbLocation, DbSatoshi},
+            ordinals_pg::{
+                self, get_chain_tip_block_height, get_inscriptions_at_block, insert_block,
+            },
+            pg_test_clear_db, pg_test_connection, pg_test_connection_pool,
+        },
+    };
+
+    async fn get_current_location<T: GenericClient>(
+        ordinal_number: u64,
+        client: &T,
+    ) -> DbCurrentLocation {
+        let row = client
+            .query_opt(
+                "SELECT * FROM current_locations WHERE ordinal_number = $1",
+                &[&PgNumericU64(ordinal_number)],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        DbCurrentLocation::from_pg_row(&row)
+    }
+
+    async fn get_locations<T: GenericClient>(ordinal_number: u64, client: &T) -> Vec<DbLocation> {
+        let row = client
+            .query(
+                "SELECT * FROM locations WHERE ordinal_number = $1",
+                &[&PgNumericU64(ordinal_number)],
+            )
+            .await
+            .unwrap();
+        row.iter().map(|r| DbLocation::from_pg_row(&r)).collect()
+    }
+
+    async fn get_inscription<T: GenericClient>(
+        inscription_id: &str,
+        client: &T,
+    ) -> Option<DbInscription> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM inscriptions WHERE inscription_id = $1",
+                &[&inscription_id],
+            )
+            .await
+            .unwrap();
+        row.map(|r| DbInscription::from_pg_row(&r))
+    }
+
+    async fn get_satoshi<T: GenericClient>(ordinal_number: u64, client: &T) -> Option<DbSatoshi> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM satoshis WHERE ordinal_number = $1",
+                &[&PgNumericU64(ordinal_number)],
+            )
+            .await
+            .unwrap();
+        row.map(|r| DbSatoshi::from_pg_row(&r))
+    }
+
+    async fn get_mime_type_count<T: GenericClient>(mime_type: &str, client: &T) -> i32 {
+        let row = client
+            .query_opt(
+                "SELECT COALESCE(count, 0) AS count FROM counts_by_mime_type WHERE mime_type = $1",
+                &[&mime_type],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("count");
+        count
+    }
+
+    async fn get_sat_rarity_count<T: GenericClient>(rarity: &str, client: &T) -> i32 {
+        let row = client
+            .query_opt(
+                "SELECT COALESCE(count, 0) AS count FROM counts_by_sat_rarity WHERE rarity = $1",
+                &[&rarity],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("count");
+        count
+    }
+
+    async fn get_type_count<T: GenericClient>(type_str: &str, client: &T) -> i32 {
+        let row = client
+            .query_opt(
+                "SELECT COALESCE(count, 0) AS count FROM counts_by_type WHERE type = $1",
+                &[&type_str],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("count");
+        count
+    }
+
+    async fn get_address_count<T: GenericClient>(address: &str, client: &T) -> i32 {
+        let row = client
+            .query_opt(
+                "SELECT COALESCE(count, 0) AS count FROM counts_by_address WHERE address = $1",
+                &[&address],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("count");
+        count
+    }
+
+    async fn get_genesis_address_count<T: GenericClient>(address: &str, client: &T) -> i32 {
+        let row = client
+            .query_opt(
+                "SELECT COALESCE(count, 0) AS count FROM counts_by_genesis_address WHERE address = $1",
+                &[&address],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("count");
+        count
+    }
+
+    async fn get_recursive_count<T: GenericClient>(recursive: bool, client: &T) -> i32 {
+        let row = client
+            .query_opt(
+                "SELECT COALESCE(count, 0) AS count FROM counts_by_recursive WHERE recursive = $1",
+                &[&recursive],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("count");
+        count
+    }
+
+    async fn get_block_reveal_count<T: GenericClient>(block_height: u64, client: &T) -> i32 {
+        let row = client
+            .query_opt(
+                "SELECT COALESCE(inscription_count, 0) AS count FROM counts_by_block WHERE block_height = $1",
+                &[&PgNumericU64(block_height)],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("count");
+        count
+    }
+
+    #[tokio::test]
+    async fn test_apply_and_rollback() -> Result<(), String> {
+        let mut pg_client = pg_test_connection().await;
+        ordinals_pg::migrate(&mut pg_client).await?;
+        with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+            // Reveal
+            {
+                let block = TestBlockBuilder::new()
+                    .height(800000)
+                    .hash("0x000000000000000000024d4c784521e54b6f4a5945376ae6e248cee1ed2c0627".to_string())
+                    .add_transaction(
+                        TestTransactionBuilder::new()
+                            .hash("0xb61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string())
+                            .add_ordinal_operation(OrdinalOperation::InscriptionRevealed(
+                                OrdinalInscriptionRevealData {
+                                    content_bytes: "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string(),
+                                    content_type: "text/plain;charset=utf-8".to_string(),
+                                    content_length: 94,
+                                    inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
+                                    inscription_fee: 0,
+                                    inscription_output_value: 10000,
+                                    inscription_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0".to_string(),
+                                    inscription_input_index: 0,
+                                    inscription_pointer: None,
+                                    inscriber_address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
+                                    delegate: None,
+                                    metaprotocol: None,
+                                    metadata: None,
+                                    parent: None,
+                                    ordinal_number: 7000,
+                                    ordinal_block_height: 0,
+                                    ordinal_offset: 0,
+                                    tx_index: 0,
+                                    transfers_pre_inscription: 0,
+                                    satpoint_post_inscription: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0:0".to_string(),
+                                    curse_type: None,
+                                },
+                            ))
+                            .build()
+                    )
+                    .build();
+                insert_block(&block, client).await?;
+                assert_eq!(1, get_inscriptions_at_block(client, 800000).await?.len());
+                assert!(get_inscription("b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0", client).await.is_some());
+                let locations = get_locations(7000, client).await;
+                assert_eq!(1, locations.len());
+                assert_eq!(
+                    Some(&DbLocation {
+                        ordinal_number: PgNumericU64(7000),
+                        block_height: PgNumericU64(800000),
+                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
+                        tx_index: PgBigIntU32(0),
+                        block_hash: "000000000000000000024d4c784521e54b6f4a5945376ae6e248cee1ed2c0627".to_string(),
+                        address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
+                        output: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string(),
+                        offset: Some(PgNumericU64(0)),
+                        prev_output: None,
+                        prev_offset: None,
+                        value: Some(PgNumericU64(10000)),
+                        transfer_type: "transferred".to_string(),
+                        timestamp: PgBigIntU32(1712982301)
+                    }),
+                    locations.get(0)
+                );
+                assert_eq!(
+                    DbCurrentLocation {
+                        ordinal_number: PgNumericU64(7000),
+                        block_height: PgNumericU64(800000),
+                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
+                        tx_index: PgBigIntU32(0),
+                        address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
+                        output: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string(),
+                        offset: Some(PgNumericU64(0))
+                    },
+                    get_current_location(7000, client).await
+                );
+                assert_eq!(
+                    Some(DbSatoshi {
+                        ordinal_number: PgNumericU64(7000),
+                        rarity: "common".to_string(),
+                        coinbase_height: PgNumericU64(0)
+                    }),
+                    get_satoshi(7000, client).await
+                );
+                assert_eq!(1, get_mime_type_count("text/plain", client).await);
+                assert_eq!(1, get_sat_rarity_count("common", client).await);
+                assert_eq!(1, get_recursive_count(false, client).await);
+                assert_eq!(1, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(1, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(1, get_type_count("blessed", client).await);
+                assert_eq!(1, get_block_reveal_count(800000, client).await);
+                assert_eq!(Some(800000), get_chain_tip_block_height(client).await?);
+            }
+            Ok(())
+        })
+        .await?;
+        pg_test_clear_db(&mut pg_client).await;
+        Ok(())
+    }
 }

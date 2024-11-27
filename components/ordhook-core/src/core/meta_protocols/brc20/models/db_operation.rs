@@ -1,4 +1,8 @@
-use chainhook_postgres::{tokio_postgres::Row, types::{PgBigIntU32, PgNumericU128, PgNumericU64}};
+use chainhook_postgres::{
+    tokio_postgres::Row,
+    types::{PgBigIntU32, PgNumericU128, PgNumericU64},
+    FromPgRow,
+};
 
 #[derive(Debug, Clone)]
 pub struct DbOperation {
@@ -19,8 +23,8 @@ pub struct DbOperation {
     pub amount: PgNumericU128,
 }
 
-impl DbOperation {
-    pub fn from_pg_row(row: &Row) -> Self {
+impl FromPgRow for DbOperation {
+    fn from_pg_row(row: &Row) -> Self {
         DbOperation {
             ticker: row.get("ticker"),
             operation: row.get("operation"),

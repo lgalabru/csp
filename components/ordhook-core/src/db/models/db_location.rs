@@ -1,4 +1,8 @@
-use chainhook_postgres::types::{PgBigIntU32, PgNumericU64};
+use chainhook_postgres::{
+    tokio_postgres::Row,
+    types::{PgBigIntU32, PgNumericU64},
+    FromPgRow,
+};
 use chainhook_sdk::types::{
     BlockIdentifier, OrdinalInscriptionRevealData, OrdinalInscriptionTransferData,
     OrdinalInscriptionTransferDestination, TransactionIdentifier,
@@ -6,7 +10,7 @@ use chainhook_sdk::types::{
 
 use crate::core::protocol::satoshi_tracking::parse_output_and_offset_from_satpoint;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbLocation {
     pub ordinal_number: PgNumericU64,
     pub block_height: PgNumericU64,
@@ -94,6 +98,26 @@ impl DbLocation {
                 OrdinalInscriptionTransferDestination::Burnt(_) => "burnt".to_string(),
             },
             timestamp: PgBigIntU32(timestamp),
+        }
+    }
+}
+
+impl FromPgRow for DbLocation {
+    fn from_pg_row(row: &Row) -> Self {
+        DbLocation {
+            ordinal_number: row.get("ordinal_number"),
+            block_height: row.get("block_height"),
+            tx_index: row.get("tx_index"),
+            tx_id: row.get("tx_id"),
+            block_hash: row.get("block_hash"),
+            address: row.get("address"),
+            output: row.get("output"),
+            offset: row.get("offset"),
+            prev_output: row.get("prev_output"),
+            prev_offset: row.get("prev_offset"),
+            value: row.get("value"),
+            transfer_type: row.get("transfer_type"),
+            timestamp: row.get("timestamp"),
         }
     }
 }

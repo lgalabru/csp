@@ -1,4 +1,8 @@
-use chainhook_postgres::{tokio_postgres::Row, types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8}};
+use chainhook_postgres::{
+    tokio_postgres::Row,
+    types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8},
+    FromPgRow,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbToken {
@@ -20,8 +24,8 @@ pub struct DbToken {
     pub timestamp: PgBigIntU32,
 }
 
-impl DbToken {
-    pub fn from_pg_row(row: &Row) -> Self {
+impl FromPgRow for DbToken {
+    fn from_pg_row(row: &Row) -> Self {
         DbToken {
             ticker: row.get("ticker"),
             display_ticker: row.get("display_ticker"),

@@ -107,6 +107,7 @@ pub fn parallelize_inscription_data_computations(
 
         let local_cache = cache_l2.clone();
 
+        // TODO(rafaelcr): Share a single rocksDB connection across threads since it's read only.
         let handle = hiro_system_kit::thread_named("Worker")
             .spawn(move || {
                 while let Ok(Some((

@@ -1,6 +1,11 @@
-use chainhook_postgres::types::{PgBigIntU32, PgNumericU64};
+use chainhook_postgres::{
+    tokio_postgres::Row,
+    types::{PgBigIntU32, PgNumericU64},
+    FromPgRow,
+};
 use chainhook_sdk::types::{
     BlockIdentifier, OrdinalInscriptionCurseType, OrdinalInscriptionRevealData,
+    TransactionIdentifier,
 };
 
 #[derive(Debug, Clone)]
@@ -11,6 +16,7 @@ pub struct DbInscription {
     pub classic_number: i64,
     pub block_height: PgNumericU64,
     pub block_hash: String,
+    pub tx_id: String,
     pub tx_index: PgBigIntU32,
     pub address: Option<String>,
     pub mime_type: String,
@@ -33,6 +39,7 @@ impl DbInscription {
     pub fn from_reveal(
         reveal: &OrdinalInscriptionRevealData,
         block_identifier: &BlockIdentifier,
+        tx_identifier: &TransactionIdentifier,
         tx_index: usize,
         timestamp: u32,
     ) -> Self {
@@ -43,6 +50,7 @@ impl DbInscription {
             classic_number: reveal.inscription_number.classic,
             block_height: PgNumericU64(block_identifier.index),
             block_hash: block_identifier.hash[2..].to_string(),
+            tx_id: tx_identifier.hash[2..].to_string(),
             tx_index: PgBigIntU32(tx_index as u32),
             address: reveal.inscriber_address.clone(),
             mime_type: reveal.content_type.split(';').nth(0).unwrap().to_string(),
@@ -72,6 +80,36 @@ impl DbInscription {
             parent: reveal.parent.clone(),
             delegate: reveal.delegate.clone(),
             timestamp: PgBigIntU32(timestamp),
+        }
+    }
+}
+
+impl FromPgRow for DbInscription {
+    fn from_pg_row(row: &Row) -> Self {
+        DbInscription {
+            inscription_id: row.get("inscription_id"),
+            ordinal_number: row.get("ordinal_number"),
+            number: row.get("number"),
+            classic_number: row.get("classic_number"),
+            block_height: row.get("block_height"),
+            block_hash: row.get("block_hash"),
+            tx_id: row.get("tx_id"),
+            tx_index: row.get("tx_index"),
+            address: row.get("address"),
+            mime_type: row.get("mime_type"),
+            content_type: row.get("content_type"),
+            content_length: row.get("content_length"),
+            content: row.get("content"),
+            fee: row.get("fee"),
+            curse_type: row.get("curse_type"),
+            recursive: row.get("recursive"),
+            input_index: row.get("input_index"),
+            pointer: row.get("pointer"),
+            metadata: row.get("metadata"),
+            metaprotocol: row.get("metaprotocol"),
+            parent: row.get("parent"),
+            delegate: row.get("delegate"),
+            timestamp: row.get("timestamp"),
         }
     }
 }
