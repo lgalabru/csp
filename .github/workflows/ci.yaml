@@ -47,8 +47,8 @@ jobs:
       - name: Setup integration environment
         run: |
           sudo ufw disable
-          docker compose -f dockerfiles/docker-compose.dev.postgres.yml up -d
-          docker compose -f dockerfiles/docker-compose.dev.postgres.yml logs -t -f --no-color &> docker-compose-logs.txt &
+          docker compose -f ../../dockerfiles/docker-compose.dev.postgres.yml up -d
+          docker compose -f ../../dockerfiles/docker-compose.dev.postgres.yml logs -t -f --no-color &> docker-compose-logs.txt &
 
       - name: Update Rust
         run: |
@@ -70,7 +70,7 @@ jobs:
         if: failure()
 
       - name: Teardown integration environment
-        run: docker compose -f dockerfiles/docker-compose.dev.postgres.yml down -v -t 0
+        run: docker compose -f ../../dockerfiles/docker-compose.dev.postgres.yml down -v -t 0
         if: always()
 
   build-publish:
