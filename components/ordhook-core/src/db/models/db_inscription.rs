@@ -8,7 +8,7 @@ use chainhook_sdk::types::{
     TransactionIdentifier,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbInscription {
     pub inscription_id: String,
     pub ordinal_number: PgNumericU64,

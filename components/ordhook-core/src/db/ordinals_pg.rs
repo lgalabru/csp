@@ -828,26 +828,65 @@ pub async fn insert_block<T: GenericClient>(
 }
 
 pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
-    // let locations = client
-    //     .query(
-    //         "SELECT * FROM locations WHERE block_height = $1",
-    //         &[&PgNumericU64(block_height)],
-    //     )
-    //     .await
-    //     .map_err(|e| format!("rollback_block (locations): {e}"))?;
-    // for row in locations.iter() {
-    //     //
-    // }
+    // Delete previous current locations, deduct owner counts, remove orphaned sats
+    let moved_sat_rows = client
+        .query(
+            "WITH affected_sats AS (
+                SELECT ordinal_number FROM locations WHERE block_height = $1
+            ),
+            affected_owners AS (
+                SELECT address, COUNT(*) AS count FROM locations WHERE block_height = $1 GROUP BY address
+            ),
+            address_count_updates AS (
+                UPDATE counts_by_address SET count = (
+                    SELECT counts_by_address.count - affected_owners.count
+                    FROM affected_owners
+                    WHERE affected_owners.address = counts_by_address.address
+                )
+                WHERE EXISTS (SELECT 1 FROM affected_owners WHERE affected_owners.address = counts_by_address.address)
+            ),
+            satoshi_deletes AS (
+                DELETE FROM satoshis WHERE ordinal_number IN (
+                    SELECT ordinal_number FROM affected_sats WHERE NOT EXISTS
+                    (
+                        SELECT 1 FROM inscriptions AS i
+                        WHERE i.ordinal_number = affected_sats.ordinal_number AND i.block_height < $1
+                    )
+                )
+                RETURNING ordinal_number, rarity
+            ),
+            deleted_satoshi_rarity AS (
+                SELECT rarity, COUNT(*) FROM satoshi_deletes GROUP BY rarity
+            ),
+            rarity_count_updates AS (
+                UPDATE counts_by_sat_rarity SET count = (
+                    SELECT counts_by_sat_rarity.count - count
+                    FROM deleted_satoshi_rarity
+                    WHERE deleted_satoshi_rarity.rarity = counts_by_sat_rarity.rarity
+                )
+                WHERE EXISTS (SELECT 1 FROM deleted_satoshi_rarity WHERE deleted_satoshi_rarity.rarity = counts_by_sat_rarity.rarity)
+            ),
+            current_location_deletes AS (
+                DELETE FROM current_locations WHERE ordinal_number IN (SELECT ordinal_number FROM affected_sats)
+            )
+            SELECT ordinal_number FROM affected_sats",
+            &[&PgNumericU64(block_height)],
+        )
+        .await
+        .map_err(|e| format!("rollback_block (1): {e}"))?;
+    // Delete inscriptions and locations
     client
         .execute(
-            "WITH locs AS (SELECT * FROM locations WHERE block_height = $1),
-            transfer_deletes AS (DELETE FROM inscription_transfers WHERE block_height = $1),
+            "WITH transfer_deletes AS (DELETE FROM inscription_transfers WHERE block_height = $1),
             inscription_deletes AS (
                 DELETE FROM inscriptions WHERE block_height = $1 RETURNING mime_type, classic_number, address, recursive
             ),
             inscription_delete_types AS (
-                SELECT CASE WHEN classic_number < 0 THEN 'cursed' ELSE 'blessed' END AS type, COUNT(*) AS count
-                FROM inscription_deletes
+                SELECT 'cursed' AS type, COUNT(*) AS count
+                FROM inscription_deletes WHERE classic_number < 0
+                UNION
+                SELECT 'blessed' AS type, COUNT(*) AS count
+                FROM inscription_deletes WHERE classic_number >= 0
             ),
             counts_by_block_deletes AS (DELETE FROM counts_by_block WHERE block_height = $1),
             type_count_updates AS (
@@ -889,7 +928,34 @@ pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> 
             &[&PgNumericU64(block_height)],
         )
         .await
-        .map_err(|e| format!("rollback_block: {e}"))?;
+        .map_err(|e| format!("rollback_block (2): {e}"))?;
+    // Re-compute current location and owners
+    let moved_sats: Vec<PgNumericU64> = moved_sat_rows.iter().map(|r| r.get("ordinal_number")).collect();
+    client
+        .execute(
+            "WITH current_location_updates AS (
+                INSERT INTO current_locations (ordinal_number, block_height, tx_id, tx_index, address, output, \"offset\")
+                (
+                    SELECT DISTINCT ON(ordinal_number) ordinal_number, block_height, tx_id, tx_index, address, output, \"offset\"
+                    FROM locations
+                    WHERE ordinal_number = ANY ($1)
+                    ORDER BY ordinal_number, block_height DESC, tx_index DESC
+                )
+            ),
+            new_owners AS (
+                SELECT address, COUNT(*) AS count
+                FROM current_locations
+                WHERE ordinal_number = ANY ($1)
+                GROUP BY address
+            )
+            INSERT INTO counts_by_address (address, count)
+            (SELECT address, count FROM new_owners)
+            ON CONFLICT (address) DO UPDATE SET count = counts_by_address.count + EXCLUDED.count",
+            &[&moved_sats]
+        )
+        .await
+        .map_err(|e| format!("rollback_block (3): {e}"))?;
+    update_chain_tip(block_height - 1, client).await?;
     Ok(())
 }
 
@@ -910,6 +976,7 @@ mod test {
             models::{DbCurrentLocation, DbInscription, DbLocation, DbSatoshi},
             ordinals_pg::{
                 self, get_chain_tip_block_height, get_inscriptions_at_block, insert_block,
+                rollback_block,
             },
             pg_test_clear_db, pg_test_connection, pg_test_connection_pool,
         },
@@ -918,16 +985,15 @@ mod test {
     async fn get_current_location<T: GenericClient>(
         ordinal_number: u64,
         client: &T,
-    ) -> DbCurrentLocation {
+    ) -> Option<DbCurrentLocation> {
         let row = client
             .query_opt(
                 "SELECT * FROM current_locations WHERE ordinal_number = $1",
                 &[&PgNumericU64(ordinal_number)],
             )
             .await
-            .unwrap()
             .unwrap();
-        DbCurrentLocation::from_pg_row(&row)
+        row.map(|r| DbCurrentLocation::from_pg_row(&r))
     }
 
     async fn get_locations<T: GenericClient>(ordinal_number: u64, client: &T) -> Vec<DbLocation> {
@@ -1051,10 +1117,8 @@ mod test {
                 &[&PgNumericU64(block_height)],
             )
             .await
-            .unwrap()
             .unwrap();
-        let count: i32 = row.get("count");
-        count
+        row.map(|r| r.get("count")).unwrap_or(0)
     }
 
     #[tokio::test]
@@ -1122,7 +1186,7 @@ mod test {
                     locations.get(0)
                 );
                 assert_eq!(
-                    DbCurrentLocation {
+                    Some(DbCurrentLocation {
                         ordinal_number: PgNumericU64(7000),
                         block_height: PgNumericU64(800000),
                         tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
@@ -1130,7 +1194,7 @@ mod test {
                         address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
                         output: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string(),
                         offset: Some(PgNumericU64(0))
-                    },
+                    }),
                     get_current_location(7000, client).await
                 );
                 assert_eq!(
@@ -1149,6 +1213,24 @@ mod test {
                 assert_eq!(1, get_type_count("blessed", client).await);
                 assert_eq!(1, get_block_reveal_count(800000, client).await);
                 assert_eq!(Some(800000), get_chain_tip_block_height(client).await?);
+            }
+
+            // Rollback reveal
+            {
+                rollback_block(800000, client).await?;
+                assert_eq!(0, get_inscriptions_at_block(client, 800000).await?.len());
+                assert_eq!(None, get_inscription("b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0", client).await);
+                assert_eq!(0, get_locations(7000, client).await.len());
+                assert_eq!(None, get_current_location(7000, client).await);
+                assert_eq!(None, get_satoshi(7000, client).await);
+                assert_eq!(0, get_mime_type_count("text/plain", client).await);
+                assert_eq!(0, get_recursive_count(false, client).await);
+                assert_eq!(0, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(0, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(0, get_type_count("blessed", client).await);
+                assert_eq!(0, get_block_reveal_count(800000, client).await);
+                assert_eq!(0, get_sat_rarity_count("common", client).await);
+                assert_eq!(Some(799999), get_chain_tip_block_height(client).await?);
             }
             Ok(())
         })
