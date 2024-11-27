@@ -1,7 +1,7 @@
 use std::{collections::HashMap, num::NonZeroUsize};
 
 use chainhook_postgres::{
-    deadpool_postgres::Transaction,
+    deadpool_postgres::GenericClient,
     types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8},
 };
 use chainhook_sdk::types::{
@@ -52,18 +52,18 @@ impl Brc20DbCache {
         }
     }
 
-    pub async fn flush(&mut self, db_tx: &Transaction<'_>) -> Result<(), String> {
-        brc20_pg::insert_tokens(&self.token_rows, db_tx).await?;
+    pub async fn flush<T: GenericClient>(&mut self, client: &T) -> Result<(), String> {
+        brc20_pg::insert_tokens(&self.token_rows, client).await?;
         self.token_rows.clear();
-        brc20_pg::insert_operations(&self.operations, db_tx).await?;
+        brc20_pg::insert_operations(&self.operations, client).await?;
         self.operations.clear();
-        brc20_pg::update_operation_counts(&self.operation_counts, db_tx).await?;
+        brc20_pg::update_operation_counts(&self.operation_counts, client).await?;
         self.operation_counts.clear();
-        brc20_pg::update_address_operation_counts(&self.address_operation_counts, db_tx).await?;
+        brc20_pg::update_address_operation_counts(&self.address_operation_counts, client).await?;
         self.address_operation_counts.clear();
-        brc20_pg::update_token_operation_counts(&self.token_operation_counts, db_tx).await?;
+        brc20_pg::update_token_operation_counts(&self.token_operation_counts, client).await?;
         self.token_operation_counts.clear();
-        brc20_pg::update_token_minted_supplies(&self.token_minted_supplies, db_tx).await?;
+        brc20_pg::update_token_minted_supplies(&self.token_minted_supplies, client).await?;
         self.token_minted_supplies.clear();
         Ok(())
     }
@@ -91,16 +91,16 @@ impl Brc20MemoryCache {
         }
     }
 
-    pub async fn get_token(
+    pub async fn get_token<T: GenericClient>(
         &mut self,
         tick: &String,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<Option<DbToken>, String> {
         if let Some(token) = self.tokens.get(tick) {
             return Ok(Some(token.clone()));
         }
-        self.handle_cache_miss(db_tx).await?;
-        match brc20_pg::get_token(tick, db_tx).await? {
+        self.handle_cache_miss(client).await?;
+        match brc20_pg::get_token(tick, client).await? {
             Some(db_token) => {
                 self.tokens.put(tick.clone(), db_token.clone());
                 return Ok(Some(db_token));
@@ -109,16 +109,16 @@ impl Brc20MemoryCache {
         }
     }
 
-    pub async fn get_token_minted_supply(
+    pub async fn get_token_minted_supply<T: GenericClient>(
         &mut self,
         tick: &String,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<Option<u128>, String> {
         if let Some(minted) = self.token_minted_supplies.get(tick) {
             return Ok(Some(minted.clone()));
         }
-        self.handle_cache_miss(db_tx).await?;
-        if let Some(minted_supply) = brc20_pg::get_token_minted_supply(tick, db_tx).await? {
+        self.handle_cache_miss(client).await?;
+        if let Some(minted_supply) = brc20_pg::get_token_minted_supply(tick, client).await? {
             self.token_minted_supplies
                 .put(tick.to_string(), minted_supply);
             return Ok(Some(minted_supply));
@@ -126,19 +126,19 @@ impl Brc20MemoryCache {
         return Ok(None);
     }
 
-    pub async fn get_token_address_avail_balance(
+    pub async fn get_token_address_avail_balance<T: GenericClient>(
         &mut self,
         tick: &String,
         address: &String,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<Option<u128>, String> {
         let key = format!("{}:{}", tick, address);
         if let Some(balance) = self.token_addr_avail_balances.get(&key) {
             return Ok(Some(balance.clone()));
         }
-        self.handle_cache_miss(db_tx).await?;
+        self.handle_cache_miss(client).await?;
         if let Some(balance) =
-            brc20_pg::get_token_available_balance_for_address(tick, address, db_tx).await?
+            brc20_pg::get_token_available_balance_for_address(tick, address, client).await?
         {
             self.token_addr_avail_balances.put(key, balance);
             return Ok(Some(balance));
@@ -146,10 +146,10 @@ impl Brc20MemoryCache {
         return Ok(None);
     }
 
-    pub async fn get_unsent_token_transfer(
+    pub async fn get_unsent_token_transfer<T: GenericClient>(
         &mut self,
         ordinal_number: u64,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<Option<DbOperation>, String> {
         // Use `get` instead of `contains` so we promote this value in the LRU.
         if let Some(_) = self.ignored_inscriptions.get(&ordinal_number) {
@@ -158,8 +158,8 @@ impl Brc20MemoryCache {
         if let Some(row) = self.unsent_transfers.get(&ordinal_number) {
             return Ok(Some(row.clone()));
         }
-        self.handle_cache_miss(db_tx).await?;
-        match brc20_pg::get_unsent_token_transfer(ordinal_number, db_tx).await? {
+        self.handle_cache_miss(client).await?;
+        match brc20_pg::get_unsent_token_transfer(ordinal_number, client).await? {
             Some(row) => {
                 self.unsent_transfers.put(ordinal_number, row.clone());
                 return Ok(Some(row));
@@ -236,7 +236,7 @@ impl Brc20MemoryCache {
         Ok(())
     }
 
-    pub async fn insert_token_mint(
+    pub async fn insert_token_mint<T: GenericClient>(
         &mut self,
         data: &VerifiedBrc20BalanceData,
         reveal: &OrdinalInscriptionRevealData,
@@ -244,9 +244,9 @@ impl Brc20MemoryCache {
         timestamp: u32,
         tx_identifier: &TransactionIdentifier,
         tx_index: u64,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<(), String> {
-        let Some(minted) = self.get_token_minted_supply(&data.tick, db_tx).await? else {
+        let Some(minted) = self.get_token_minted_supply(&data.tick, client).await? else {
             unreachable!("BRC-20 deployed token should have a minted supply entry");
         };
         let (output, offset) =
@@ -254,7 +254,7 @@ impl Brc20MemoryCache {
         self.token_minted_supplies
             .put(data.tick.clone(), minted + data.amt);
         let balance = self
-            .get_token_address_avail_balance(&data.tick, &data.address, db_tx)
+            .get_token_address_avail_balance(&data.tick, &data.address, client)
             .await?
             .unwrap_or(0);
         self.token_addr_avail_balances.put(
@@ -291,7 +291,7 @@ impl Brc20MemoryCache {
         Ok(())
     }
 
-    pub async fn insert_token_transfer(
+    pub async fn insert_token_transfer<T: GenericClient>(
         &mut self,
         data: &VerifiedBrc20BalanceData,
         reveal: &OrdinalInscriptionRevealData,
@@ -299,10 +299,10 @@ impl Brc20MemoryCache {
         timestamp: u32,
         tx_identifier: &TransactionIdentifier,
         tx_index: u64,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<(), String> {
         let Some(balance) = self
-            .get_token_address_avail_balance(&data.tick, &data.address, db_tx)
+            .get_token_address_avail_balance(&data.tick, &data.address, client)
             .await?
         else {
             unreachable!("BRC-20 transfer insert attempted for an address with no balance");
@@ -341,7 +341,7 @@ impl Brc20MemoryCache {
         Ok(())
     }
 
-    pub async fn insert_token_transfer_send(
+    pub async fn insert_token_transfer_send<T: GenericClient>(
         &mut self,
         data: &VerifiedBrc20TransferData,
         transfer: &OrdinalInscriptionTransferData,
@@ -349,12 +349,12 @@ impl Brc20MemoryCache {
         timestamp: u32,
         tx_identifier: &TransactionIdentifier,
         tx_index: u64,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<(), String> {
         let (output, offset) =
             parse_output_and_offset_from_satpoint(&transfer.satpoint_post_transfer)?;
         let transfer_row = self
-            .get_unsent_transfer_row(transfer.ordinal_number, db_tx)
+            .get_unsent_transfer_row(transfer.ordinal_number, client)
             .await?;
         let operation = "transfer_send".to_string();
         self.increase_operation_count(operation.clone(), 1);
@@ -402,7 +402,7 @@ impl Brc20MemoryCache {
         });
         self.increase_token_operation_count(data.tick.clone(), 1);
         let balance = self
-            .get_token_address_avail_balance(&data.tick, &data.receiver_address, db_tx)
+            .get_token_address_avail_balance(&data.tick, &data.receiver_address, client)
             .await?
             .unwrap_or(0);
         self.token_addr_avail_balances.put(
@@ -447,16 +447,16 @@ impl Brc20MemoryCache {
             .or_insert(delta);
     }
 
-    async fn get_unsent_transfer_row(
+    async fn get_unsent_transfer_row<T: GenericClient>(
         &mut self,
         ordinal_number: u64,
-        db_tx: &Transaction<'_>,
+        client: &T,
     ) -> Result<DbOperation, String> {
         if let Some(transfer) = self.unsent_transfers.get(&ordinal_number) {
             return Ok(transfer.clone());
         }
-        self.handle_cache_miss(db_tx).await?;
-        let Some(transfer) = brc20_pg::get_unsent_token_transfer(ordinal_number, db_tx).await?
+        self.handle_cache_miss(client).await?;
+        let Some(transfer) = brc20_pg::get_unsent_token_transfer(ordinal_number, client).await?
         else {
             unreachable!("Invalid transfer ordinal number {}", ordinal_number)
         };
@@ -464,9 +464,9 @@ impl Brc20MemoryCache {
         return Ok(transfer);
     }
 
-    async fn handle_cache_miss(&mut self, db_tx: &Transaction<'_>) -> Result<(), String> {
+    async fn handle_cache_miss<T: GenericClient>(&mut self, client: &T) -> Result<(), String> {
         // TODO: Measure this event somewhere
-        self.db_cache.flush(db_tx).await?;
+        self.db_cache.flush(client).await?;
         Ok(())
     }
 }

@@ -490,22 +490,20 @@ pub async fn rollback_block_operations<T: GenericClient>(
                     WHERE grouped_balance_changes.ticker = balances.ticker AND grouped_balance_changes.address = balances.address
                 )
             ),
-            token_mint_updates AS (
-                UPDATE tokens SET minted_supply = (
-                    SELECT tokens.minted_supply - SUM(ops.amount)
-                    FROM ops
-                    WHERE ops.ticker = tokens.ticker AND ops.operation = 'mint'
-                    GROUP BY ops.ticker
-                )
-                WHERE EXISTS (SELECT 1 FROM ops WHERE ops.ticker = tokens.ticker)
-            ),
-            token_tx_count_updates AS (
-                UPDATE tokens SET tx_count = (
-                    SELECT tokens.tx_count - COUNT(*)
-                    FROM ops
-                    WHERE ops.ticker = tokens.ticker AND ops.operation <> 'transfer_receive'
-                    GROUP BY ops.ticker
-                )
+            token_updates AS (
+                UPDATE tokens SET
+                    minted_supply = COALESCE((
+                        SELECT tokens.minted_supply - SUM(ops.amount)
+                        FROM ops
+                        WHERE ops.ticker = tokens.ticker AND ops.operation = 'mint'
+                        GROUP BY ops.ticker
+                    ), minted_supply),
+                    tx_count = COALESCE((
+                        SELECT tokens.tx_count - COUNT(*)
+                        FROM ops
+                        WHERE ops.ticker = tokens.ticker AND ops.operation <> 'transfer_receive'
+                        GROUP BY ops.ticker
+                    ), tx_count)
                 WHERE EXISTS (SELECT 1 FROM ops WHERE ops.ticker = tokens.ticker)
             ),
             address_op_count_updates AS (
@@ -546,9 +544,7 @@ pub async fn rollback_block_operations<T: GenericClient>(
 #[cfg(test)]
 mod test {
     use chainhook_postgres::{
-        deadpool_postgres::GenericClient,
-        types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8},
-        with_pg_transaction,
+        deadpool_postgres::GenericClient, types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8}, with_pg_client, with_pg_transaction
     };
     use chainhook_sdk::types::{
         BlockIdentifier, OrdinalInscriptionTransferDestination, TransactionIdentifier,
@@ -556,7 +552,7 @@ mod test {
 
     use crate::{
         core::meta_protocols::brc20::{
-            brc20_pg::{self, get_token_minted_supply},
+            brc20_pg::{self, get_operations_at_block, get_token_minted_supply},
             cache::Brc20MemoryCache,
             models::DbToken,
             test_utils::{Brc20RevealBuilder, Brc20TransferBuilder},
@@ -732,6 +728,8 @@ mod test {
                     )
                     .await?;
                 cache.db_cache.flush(client).await?;
+                let operations = get_operations_at_block(800001, client).await?;
+                assert_eq!(1, operations.len());
                 assert_eq!((1, 1, 0, 0), get_counts_by_operation(client).await);
                 assert_eq!(
                     (1, 1, 0, 0),
@@ -783,6 +781,10 @@ mod test {
                     .await?;
                 cache.db_cache.flush(client).await?;
                 assert_eq!((1, 1, 1, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    Some(1000_000000000000000000),
+                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                );
                 assert_eq!(
                     (1, 1, 1, 0),
                     get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
@@ -836,6 +838,10 @@ mod test {
                 cache.db_cache.flush(client).await?;
                 assert_eq!((1, 1, 1, 1), get_counts_by_operation(client).await);
                 assert_eq!(
+                    Some(1000_000000000000000000),
+                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                );
+                assert_eq!(
                     (1, 1, 1, 1),
                     get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
                         .await
@@ -869,6 +875,10 @@ mod test {
                 brc20_pg::rollback_block_operations(800003, client).await?;
                 assert_eq!((1, 1, 1, 0), get_counts_by_operation(client).await);
                 assert_eq!(
+                    Some(1000_000000000000000000),
+                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                );
+                assert_eq!(
                     (1, 1, 1, 0),
                     get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
                         .await
@@ -896,6 +906,10 @@ mod test {
             {
                 brc20_pg::rollback_block_operations(800002, client).await?;
                 assert_eq!((1, 1, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!(
+                    Some(1000_000000000000000000),
+                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                );
                 assert_eq!(
                     (1, 1, 0, 0),
                     get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
