@@ -826,16 +826,16 @@ pub async fn insert_block<T: GenericClient>(
 }
 
 pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> Result<(), String> {
-    let locations = client
-        .query(
-            "SELECT * FROM locations WHERE block_height = $1",
-            &[&PgNumericU64(block_height)],
-        )
-        .await
-        .map_err(|e| format!("rollback_block (locations): {e}"))?;
-    for row in locations.iter() {
-        //
-    }
+    // let locations = client
+    //     .query(
+    //         "SELECT * FROM locations WHERE block_height = $1",
+    //         &[&PgNumericU64(block_height)],
+    //     )
+    //     .await
+    //     .map_err(|e| format!("rollback_block (locations): {e}"))?;
+    // for row in locations.iter() {
+    //     //
+    // }
     client
         .execute(
             "WITH locs AS (SELECT * FROM locations WHERE block_height = $1),

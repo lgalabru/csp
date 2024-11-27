@@ -44,6 +44,12 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Setup integration environment
+        run: |
+          sudo ufw disable
+          docker compose -f dockerfiles/docker-compose.dev.postgres.yml up -d
+          docker compose -f dockerfiles/docker-compose.dev.postgres.yml logs -t -f --no-color &> docker-compose-logs.txt &
+
       - name: Update Rust
         run: |
           rustup update
@@ -58,6 +64,14 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: hirosystems/ordhook
+
+      - name: Print integration environment logs
+        run: cat docker-compose-logs.txt
+        if: failure()
+
+      - name: Teardown integration environment
+        run: docker compose -f dockerfiles/docker-compose.dev.postgres.yml down -v -t 0
+        if: always()
 
   build-publish:
     runs-on: ubuntu-latest
