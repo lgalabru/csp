@@ -544,7 +544,9 @@ pub async fn rollback_block_operations<T: GenericClient>(
 #[cfg(test)]
 mod test {
     use chainhook_postgres::{
-        deadpool_postgres::GenericClient, types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8}, with_pg_client, with_pg_transaction
+        deadpool_postgres::GenericClient,
+        types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8},
+        with_pg_transaction,
     };
     use chainhook_sdk::types::{
         BlockIdentifier, OrdinalInscriptionTransferDestination, TransactionIdentifier,

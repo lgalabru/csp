@@ -476,8 +476,11 @@ async fn insert_current_locations<T: GenericClient>(
                     VALUES {}
                     ON CONFLICT (ordinal_number) DO UPDATE SET
                         block_height = EXCLUDED.block_height,
+                        tx_id = EXCLUDED.tx_id,
                         tx_index = EXCLUDED.tx_index,
-                        address = EXCLUDED.address
+                        address = EXCLUDED.address,
+                        output = EXCLUDED.output,
+                        \"offset\" = EXCLUDED.\"offset\"
                     WHERE
                         EXCLUDED.block_height > current_locations.block_height OR
                         (EXCLUDED.block_height = current_locations.block_height AND
@@ -930,19 +933,26 @@ pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> 
         .await
         .map_err(|e| format!("rollback_block (2): {e}"))?;
     // Re-compute current location and owners
-    let moved_sats: Vec<PgNumericU64> = moved_sat_rows.iter().map(|r| r.get("ordinal_number")).collect();
+    let moved_sats: Vec<PgNumericU64> = moved_sat_rows
+        .iter()
+        .map(|r| r.get("ordinal_number"))
+        .collect();
     client
         .execute(
-            "WITH current_location_updates AS (
-                INSERT INTO current_locations (ordinal_number, block_height, tx_id, tx_index, address, output, \"offset\")
-                (
-                    SELECT DISTINCT ON(ordinal_number) ordinal_number, block_height, tx_id, tx_index, address, output, \"offset\"
-                    FROM locations
-                    WHERE ordinal_number = ANY ($1)
-                    ORDER BY ordinal_number, block_height DESC, tx_index DESC
-                )
-            ),
-            new_owners AS (
+            "INSERT INTO current_locations (ordinal_number, block_height, tx_id, tx_index, address, output, \"offset\")
+            (
+                SELECT DISTINCT ON(ordinal_number) ordinal_number, block_height, tx_id, tx_index, address, output, \"offset\"
+                FROM locations
+                WHERE ordinal_number = ANY ($1)
+                ORDER BY ordinal_number, block_height DESC, tx_index DESC
+            )",
+            &[&moved_sats]
+        )
+        .await
+        .map_err(|e| format!("rollback_block (3): {e}"))?;
+    client
+        .execute(
+            "WITH new_owners AS (
                 SELECT address, COUNT(*) AS count
                 FROM current_locations
                 WHERE ordinal_number = ANY ($1)
@@ -954,7 +964,7 @@ pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> 
             &[&moved_sats]
         )
         .await
-        .map_err(|e| format!("rollback_block (3): {e}"))?;
+        .map_err(|e| format!("rollback_block (4): {e}"))?;
     update_chain_tip(block_height - 1, client).await?;
     Ok(())
 }
@@ -967,7 +977,8 @@ mod test {
         with_pg_transaction, FromPgRow,
     };
     use chainhook_sdk::types::{
-        OrdinalInscriptionNumber, OrdinalInscriptionRevealData, OrdinalOperation,
+        OrdinalInscriptionNumber, OrdinalInscriptionRevealData, OrdinalInscriptionTransferData,
+        OrdinalInscriptionTransferDestination, OrdinalOperation,
     };
 
     use crate::{
@@ -1214,7 +1225,97 @@ mod test {
                 assert_eq!(1, get_block_reveal_count(800000, client).await);
                 assert_eq!(Some(800000), get_chain_tip_block_height(client).await?);
             }
+            // Transfer
+            {
+                let block = TestBlockBuilder::new()
+                    .height(800001)
+                    .hash("0x00000000000000000001b322ec2ea8b5b9b0ac413385069ad6b0c84e0331bf23".to_string())
+                    .add_transaction(
+                        TestTransactionBuilder::new()
+                            .hash("0x4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f".to_string())
+                            .add_ordinal_operation(OrdinalOperation::InscriptionTransferred(
+                                OrdinalInscriptionTransferData {
+                                    ordinal_number: 7000,
+                                    destination: OrdinalInscriptionTransferDestination::Transferred("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay".to_string()),
+                                    satpoint_pre_transfer: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0:0".to_string(),
+                                    satpoint_post_transfer: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f:0:0".to_string(),
+                                    post_transfer_output_value: Some(8000),
+                                    tx_index: 0
+                                }
+                            ))
+                            .build()
+                    )
+                    .build();
+                insert_block(&block, client).await?;
+                assert_eq!(0, get_inscriptions_at_block(client, 800001).await?.len());
+                let locations = get_locations(7000, client).await;
+                assert_eq!(2, locations.len());
+                assert_eq!(
+                    Some(&DbLocation {
+                        ordinal_number: PgNumericU64(7000),
+                        block_height: PgNumericU64(800001),
+                        tx_id: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f".to_string(),
+                        tx_index: PgBigIntU32(0),
+                        block_hash: "00000000000000000001b322ec2ea8b5b9b0ac413385069ad6b0c84e0331bf23".to_string(),
+                        address: Some("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay".to_string()),
+                        output: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f:0".to_string(),
+                        offset: Some(PgNumericU64(0)),
+                        prev_output: Some("b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string()),
+                        prev_offset: Some(PgNumericU64(0)),
+                        value: Some(PgNumericU64(8000)),
+                        transfer_type: "transferred".to_string(),
+                        timestamp: PgBigIntU32(1712982301)
+                    }),
+                    locations.get(1)
+                );
+                assert_eq!(
+                    Some(DbCurrentLocation {
+                        ordinal_number: PgNumericU64(7000),
+                        block_height: PgNumericU64(800001),
+                        tx_id: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f".to_string(),
+                        tx_index: PgBigIntU32(0),
+                        address: Some("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay".to_string()),
+                        output: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f:0".to_string(),
+                        offset: Some(PgNumericU64(0))
+                    }),
+                    get_current_location(7000, client).await
+                );
+                assert_eq!(1, get_mime_type_count("text/plain", client).await);
+                assert_eq!(1, get_sat_rarity_count("common", client).await);
+                assert_eq!(1, get_recursive_count(false, client).await);
+                assert_eq!(0, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(1, get_address_count("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay", client).await);
+                assert_eq!(1, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(1, get_type_count("blessed", client).await);
+                assert_eq!(Some(800001), get_chain_tip_block_height(client).await?);
+            }
 
+            // Rollback transfer
+            {
+                rollback_block(800001, client).await?;
+                assert_eq!(1, get_locations(7000, client).await.len());
+                assert_eq!(
+                    Some(DbCurrentLocation {
+                        ordinal_number: PgNumericU64(7000),
+                        block_height: PgNumericU64(800000),
+                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
+                        tx_index: PgBigIntU32(0),
+                        address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
+                        output: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string(),
+                        offset: Some(PgNumericU64(0))
+                    }),
+                    get_current_location(7000, client).await
+                );
+                assert_eq!(1, get_mime_type_count("text/plain", client).await);
+                assert_eq!(1, get_sat_rarity_count("common", client).await);
+                assert_eq!(1, get_recursive_count(false, client).await);
+                assert_eq!(0, get_address_count("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay", client).await);
+                assert_eq!(1, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(1, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
+                assert_eq!(1, get_type_count("blessed", client).await);
+                assert_eq!(1, get_block_reveal_count(800000, client).await);
+                assert_eq!(Some(800000), get_chain_tip_block_height(client).await?);
+            }
             // Rollback reveal
             {
                 rollback_block(800000, client).await?;
