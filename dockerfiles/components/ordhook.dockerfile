@@ -7,7 +7,7 @@ ENV GIT_COMMIT=${GIT_COMMIT}
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y ca-certificates pkg-config libssl-dev libclang-11-dev libunwind-dev libunwind8 curl gnupg
-RUN rustup update 1.77.1 && rustup default 1.77.1
+RUN rustup update 1.80.1 && rustup default 1.80.1
 
 RUN mkdir /out
 COPY ./Cargo.toml /src/Cargo.toml
