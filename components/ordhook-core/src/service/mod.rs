@@ -307,7 +307,8 @@ impl Service {
                 hiro_system_kit::nestable_block_on(async move {
                     loop {
                         select! {
-                            // Mutate a newly-received Bitcoin block and add any Ordinals or BRC-20 activity to it. Write index data to DB.
+                            // Mutate a newly-received Bitcoin block and add any Ordinals or BRC-20 activity to it. Write index
+                            // data to DB.
                             recv(block_mutator_in_rx) -> msg => {
                                 if let Ok((mut blocks_to_mutate, blocks_ids_to_rollback)) = msg {
                                     match chainhook_sidecar_mutate_blocks(
@@ -503,21 +504,8 @@ pub async fn chainhook_sidecar_mutate_blocks(
 ) -> Result<(), String> {
     let blocks_db_rw = open_blocks_db_with_retry(true, &config, ctx);
 
-    for _block_id_to_rollback in blocks_ids_to_rollback.iter() {
-        // FIXME
-        // if let Err(e) = drop_block_data_from_all_dbs(
-        //     block_id_to_rollback.index,
-        //     block_id_to_rollback.index,
-        //     &blocks_db_rw,
-        //     &sqlite_dbs_rw,
-        //     &ctx,
-        // ) {
-        //     try_error!(
-        //         ctx,
-        //         "Unable to rollback bitcoin block {}: {e}",
-        //         block_id_to_rollback.index
-        //     );
-        // }
+    for block_id_to_rollback in blocks_ids_to_rollback.iter() {
+        rollback_block(block_id_to_rollback.index, config, pg_pools, ctx).await?;
     }
 
     for cache in blocks_to_mutate.iter_mut() {
@@ -548,8 +536,6 @@ pub async fn chainhook_sidecar_mutate_blocks(
         if !cache.processed_by_sidecar {
             let mut cache_l1 = BTreeMap::new();
             let mut sequence_cursor = SequenceCursor::new();
-
-            // Index block and write data to DB.
             process_block(
                 &mut cache.block,
                 &vec![],
@@ -563,20 +549,6 @@ pub async fn chainhook_sidecar_mutate_blocks(
                 &ctx,
             )
             .await?;
-
-            let inscription_numbers = get_inscriptions_revealed_in_block(&cache.block)
-                .iter()
-                .map(|d| d.get_inscription_number().to_string())
-                .collect::<Vec<String>>();
-            let inscriptions_transferred =
-                get_inscriptions_transferred_in_block(&cache.block).len();
-            try_info!(
-                ctx,
-                "Block #{} processed, mutated and revealed {} inscriptions [{}] and {inscriptions_transferred} transfers",
-                cache.block.block_identifier.index,
-                inscription_numbers.len(),
-                inscription_numbers.join(", ")
-            );
             cache.processed_by_sidecar = true;
         }
     }

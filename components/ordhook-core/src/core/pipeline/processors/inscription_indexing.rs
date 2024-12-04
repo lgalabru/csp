@@ -34,15 +34,11 @@ use crate::{
             satoshi_tracking::augment_block_with_transfers,
             sequence_cursor::SequenceCursor,
         },
-    },
-    db::{
+    }, db::{
         blocks::{self, open_blocks_db_with_retry},
         cursor::TransactionBytesCursor,
         ordinals_pg,
-    },
-    service::PgConnectionPools,
-    try_crit, try_info,
-    utils::monitoring::PrometheusMonitoring,
+    }, service::PgConnectionPools, try_crit, try_debug, try_info, utils::monitoring::PrometheusMonitoring
 };
 
 use crate::{
@@ -116,12 +112,9 @@ pub fn start_inscription_indexing_processor(
                         );
                     }
 
-                    // Early return
                     if blocks.is_empty() {
                         continue;
                     }
-
-                    try_info!(ctx, "Processing {} blocks", blocks.len());
                     blocks = match process_blocks(
                         &mut blocks,
                         &mut sequence_cursor,
@@ -144,10 +137,7 @@ pub fn start_inscription_indexing_processor(
 
                     garbage_collect_nth_block += blocks.len();
                     if garbage_collect_nth_block > garbage_collect_every_n_blocks {
-                        try_info!(ctx, "Performing garbage collecting");
-
-                        // Clear L2 cache on a regular basis
-                        try_info!(ctx, "Clearing cache L2 ({} entries)", cache_l2.len());
+                        try_debug!(ctx, "Clearing cache L2 ({} entries)", cache_l2.len());
                         cache_l2.clear();
                         garbage_collect_nth_block = 0;
                     }
@@ -291,7 +281,7 @@ pub async fn rollback_block(
     pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<(), String> {
-    try_info!(ctx, "Rolling back block #{block_height}...");
+    try_info!(ctx, "Rolling back block #{block_height}");
     // Drop from blocks DB.
     let blocks_db = open_blocks_db_with_retry(true, &config, ctx);
     blocks::delete_blocks_in_block_range(
