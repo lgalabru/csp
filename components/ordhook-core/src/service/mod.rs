@@ -12,7 +12,7 @@ use crate::core::pipeline::processors::inscription_indexing::{
 use crate::core::protocol::inscription_parsing::{
     get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
 };
-use crate::core::protocol::inscription_sequencing::SequenceCursor;
+use crate::core::protocol::sequence_cursor::SequenceCursor;
 use crate::core::{
     first_inscription_height, new_traversals_lazy_cache, should_sync_ordinals_db,
     should_sync_rocks_db,

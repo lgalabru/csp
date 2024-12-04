@@ -28,10 +28,11 @@ use crate::{
             inscription_parsing::parse_inscriptions_in_standardized_block,
             inscription_sequencing::{
                 augment_block_with_inscriptions, get_bitcoin_network, get_jubilee_block_height,
-                parallelize_inscription_data_computations, SequenceCursor,
+                parallelize_inscription_data_computations,
             },
             satoshi_numbering::TraversalResult,
             satoshi_tracking::augment_block_with_transfers,
+            sequence_cursor::SequenceCursor,
         },
     },
     db::{
