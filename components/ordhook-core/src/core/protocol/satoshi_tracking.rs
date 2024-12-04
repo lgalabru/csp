@@ -4,8 +4,7 @@ use chainhook_postgres::deadpool_postgres::Transaction;
 use chainhook_sdk::{
     bitcoincore_rpc_json::bitcoin::{Address, Network, ScriptBuf},
     types::{
-        BitcoinBlockData, BitcoinTransactionData, OrdinalInscriptionTransferData,
-        OrdinalInscriptionTransferDestination, OrdinalOperation,
+        BitcoinBlockData, BitcoinTransactionData, BlockIdentifier, OrdinalInscriptionTransferData, OrdinalInscriptionTransferDestination, OrdinalOperation
     },
     utils::Context,
 };
@@ -59,6 +58,7 @@ pub async fn augment_block_with_transfers(
         let _ = augment_transaction_with_ordinal_transfers(
             tx,
             tx_index,
+            &block.block_identifier,
             &network,
             &coinbase_tx,
             coinbase_subsidy,
@@ -180,6 +180,7 @@ pub fn compute_satpoint_post_transfer(
 pub async fn augment_transaction_with_ordinal_transfers(
     tx: &mut BitcoinTransactionData,
     tx_index: usize,
+    block_identifier: &BlockIdentifier,
     network: &Network,
     coinbase_tx: &BitcoinTransactionData,
     coinbase_subsidy: u64,
@@ -234,11 +235,19 @@ pub async fn augment_transaction_with_ordinal_transfers(
                 ordinal_number: watched_satpoint.ordinal_number,
                 destination,
                 tx_index,
-                satpoint_pre_transfer,
-                satpoint_post_transfer,
+                satpoint_pre_transfer: satpoint_pre_transfer.clone(),
+                satpoint_post_transfer: satpoint_post_transfer.clone(),
                 post_transfer_output_value,
             };
 
+            try_info!(
+                ctx,
+                "Inscription transfer detected on Satoshi {} ({} -> {}) at block #{}",
+                transfer_data.ordinal_number,
+                satpoint_pre_transfer,
+                satpoint_post_transfer,
+                block_identifier.index
+            );
             transfers.push(transfer_data.clone());
             tx.metadata
                 .ordinal_operations

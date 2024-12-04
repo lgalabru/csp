@@ -25,10 +25,7 @@ use crate::{
         },
         pipeline::processors::block_archiving::store_compacted_blocks,
         protocol::{
-            inscription_parsing::{
-                get_inscriptions_revealed_in_block, get_inscriptions_transferred_in_block,
-                parse_inscriptions_in_standardized_block,
-            },
+            inscription_parsing::parse_inscriptions_in_standardized_block,
             inscription_sequencing::{
                 augment_block_with_inscriptions, get_bitcoin_network, get_jubilee_block_height,
                 parallelize_inscription_data_computations, SequenceCursor,
@@ -203,21 +200,6 @@ pub async fn process_blocks(
         )
         .await?;
 
-        let inscriptions_revealed = get_inscriptions_revealed_in_block(&block)
-            .iter()
-            .map(|d| d.get_inscription_number().to_string())
-            .collect::<Vec<String>>();
-
-        let inscriptions_transferred = get_inscriptions_transferred_in_block(&block).len();
-
-        try_info!(
-            ctx,
-            "Block #{} processed, revealed {} inscriptions [{}] and {inscriptions_transferred} transfers",
-            block.block_identifier.index,
-            inscriptions_revealed.len(),
-            inscriptions_revealed.join(", ")
-        );
-
         if let Some(post_processor_tx) = post_processor {
             let _ = post_processor_tx.send(block.clone());
         }
@@ -238,7 +220,10 @@ pub async fn process_block(
     pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<(), String> {
+    let stopwatch = std::time::Instant::now();
     let block_height = block.block_identifier.index;
+    try_info!(ctx, "Indexing block #{block_height}");
+
     with_pg_transaction(&pg_pools.ordinals, |tx| async move {
         // Parsed BRC20 ops will be deposited here for this block.
         let mut brc20_operation_map = HashMap::new();
@@ -289,7 +274,14 @@ pub async fn process_block(
         );
         Ok(())
     })
-    .await
+    .await?;
+
+    try_info!(
+        ctx,
+        "Block #{block_height} indexed in {}s",
+        stopwatch.elapsed().as_millis() as f32 / 1000.0
+    );
+    Ok(())
 }
 
 pub async fn rollback_block(

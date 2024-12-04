@@ -74,7 +74,7 @@ pub fn parallelize_inscription_data_computations(
         Context::empty()
     };
 
-    try_info!(
+    try_debug!(
         inner_ctx,
         "Inscriptions data computation for block #{} started",
         block.block_identifier.index
@@ -157,7 +157,7 @@ pub fn parallelize_inscription_data_computations(
         .map(|b| format!("{}", b.block_identifier.index))
         .collect::<Vec<_>>();
 
-    try_info!(
+    try_debug!(
         inner_ctx,
         "Number of inscriptions in block #{} to process: {} (L1 cache hits: {}, queue: [{}], L1 cache len: {}, L2 cache len: {})",
         block.block_identifier.index,
@@ -197,7 +197,7 @@ pub fn parallelize_inscription_data_computations(
         }
         match traversal_result {
             Ok((traversal, inscription_pointer, _)) => {
-                try_info!(
+                try_debug!(
                     inner_ctx,
                     "Completed ordinal number retrieval for Satpoint {}:{}:{} (block: #{}:{}, transfers: {}, progress: {traversals_received}/{expected_traversals}, priority queue: {prioritary}, thread: {thread_index})",
                     traversal.transaction_identifier_inscription.hash,
@@ -257,7 +257,7 @@ pub fn parallelize_inscription_data_computations(
             }
         }
     }
-    try_info!(
+    try_debug!(
         inner_ctx,
         "Inscriptions data computation for block #{} collected",
         block.block_identifier.index
@@ -268,7 +268,7 @@ pub fn parallelize_inscription_data_computations(
         // Empty the queue
         if let Ok((traversal_result, _prioritary, thread_index)) = traversal_rx.try_recv() {
             if let Ok((traversal, inscription_pointer, _)) = traversal_result {
-                try_info!(
+                try_debug!(
                     inner_ctx,
                     "Completed ordinal number retrieval for Satpoint {}:{}:{} (block: #{}:{}, transfers: {}, pre-retrieval, thread: {thread_index})",
                     traversal.transaction_identifier_inscription.hash,
@@ -297,7 +297,7 @@ pub fn parallelize_inscription_data_computations(
         }
     });
 
-    try_info!(
+    try_debug!(
         inner_ctx,
         "Inscriptions data computation for block #{} ended",
         block.block_identifier.index
@@ -722,14 +722,12 @@ async fn augment_transaction_with_ordinals_inscriptions_data(
 
         try_info!(
             ctx,
-            "Inscription {} (#{}) detected on Satoshi {} (block #{}, {} transfers)",
+            "Inscription reveal {} (#{}) detected on Satoshi {} at block #{}",
             inscription.inscription_id,
             inscription.get_inscription_number(),
             inscription.ordinal_number,
             block_identifier.index,
-            inscription.transfers_pre_inscription,
         );
-
         sequence_cursor.increment(is_cursed, db_tx).await?;
     }
     tx.metadata
@@ -851,6 +849,7 @@ pub async fn augment_block_with_pre_computed_ordinals_data(
             let _ = augment_transaction_with_ordinal_transfers(
                 tx,
                 tx_index,
+                &block.block_identifier,
                 &network,
                 &coinbase_tx,
                 coinbase_subsidy,
