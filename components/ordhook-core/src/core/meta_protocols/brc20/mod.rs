@@ -53,6 +53,32 @@ pub fn decimals_str_amount_to_u128(amt: &String, decimals: u8) -> Result<u128, S
 /// Transform a BRC-20 amount which was stored in Postgres as a `u128` back to a `String` with decimals included.
 pub fn u128_amount_to_decimals_str(amount: u128, decimals: u8) -> String {
     let num_str = amount.to_string();
-    let (integer, fractional) = num_str.split_at(num_str.len() - decimals as usize);
-    format!("{}.{}", integer, fractional)
+    let decimal_point = num_str.len() as i32 - decimals as i32;
+    if decimal_point < 0 {
+        let padding = "0".repeat(decimal_point.abs() as usize);
+        format!("0.{padding}{num_str}")
+    } else {
+        let (integer, fractional) = num_str.split_at(decimal_point as usize);
+        format!("{}.{}", integer, fractional)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use test_case::test_case;
+
+    use super::{decimals_str_amount_to_u128, u128_amount_to_decimals_str};
+
+    #[test_case((1000000000000000000, 18) => "1.000000000000000000".to_string(); "with whole number")]
+    #[test_case((80000000000000000, 18) => "0.080000000000000000".to_string(); "with decimal number")]
+    fn test_u128_to_decimals_str((amount, decimals): (u128, u8)) -> String {
+        u128_amount_to_decimals_str(amount, decimals)
+    }
+
+    #[test_case((&"1.000000000000000000".to_string(), 18) => 1000000000000000000; "with whole number")]
+    #[test_case((&"1".to_string(), 18) => 1000000000000000000; "with whole number no decimals")]
+    #[test_case((&"0.080000000000000000".to_string(), 18) => 80000000000000000; "with decimal number")]
+    fn test_decimals_str_to_u128((amount, decimals): (&String, u8)) -> u128 {
+        decimals_str_amount_to_u128(amount, decimals).unwrap()
+    }
 }
