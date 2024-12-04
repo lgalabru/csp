@@ -3,10 +3,10 @@ use ordhook::chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
 };
 use ordhook::config::{
-    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, PostgresConfig, PredicatesApi,
-    PredicatesApiConfig, ResourcesConfig, SnapshotConfig, SnapshotConfigDownloadUrls,
-    StorageConfig, DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT,
-    DEFAULT_BRC20_LRU_CACHE_SIZE, DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
+    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, PredicatesApi, PredicatesApiConfig,
+    ResourcesConfig, SnapshotConfig, SnapshotConfigDownloadUrls, StorageConfig,
+    DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE,
+    DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
 };
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -71,20 +71,22 @@ impl ConfigFile {
                     .observers_working_dir
                     .unwrap_or("observers".into()),
             },
-            ordinals_db: PostgresConfig {
-                database: config_file.ordinals_db.database,
+            ordinals_db: ordhook::config::PgConnectionConfig {
+                dbname: config_file.ordinals_db.database,
                 host: config_file.ordinals_db.host,
                 port: config_file.ordinals_db.port,
-                username: config_file.ordinals_db.username,
+                user: config_file.ordinals_db.username,
                 password: config_file.ordinals_db.password,
+                search_path: config_file.ordinals_db.search_path,
             },
             brc20_db: match config_file.brc20_db {
-                Some(brc20_db) => Some(PostgresConfig {
-                    database: brc20_db.database,
+                Some(brc20_db) => Some(ordhook::config::PgConnectionConfig {
+                    dbname: brc20_db.database,
                     host: brc20_db.host,
                     port: brc20_db.port,
-                    username: brc20_db.username,
+                    user: brc20_db.username,
                     password: brc20_db.password,
+                    search_path: brc20_db.search_path,
                 }),
                 None => None,
             },
@@ -199,6 +201,7 @@ pub struct PostgresConfigFile {
     pub port: u16,
     pub username: String,
     pub password: Option<String>,
+    pub search_path: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

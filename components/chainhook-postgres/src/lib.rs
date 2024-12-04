@@ -10,12 +10,14 @@ pub use tokio_postgres;
 use tokio_postgres::{Client, Config, NoTls, Row};
 
 /// A Postgres configuration for a single database.
+#[derive(Clone, Debug)]
 pub struct PgConnectionConfig {
     pub dbname: String,
     pub host: String,
     pub port: u16,
     pub user: String,
     pub password: Option<String>,
+    pub search_path: Option<String>,
 }
 
 /// Creates a Postgres connection pool based on a single database config. You can then use this pool to create ad-hoc clients and
@@ -26,7 +28,11 @@ pub fn new_pg_connection_pool(config: &PgConnectionConfig) -> Result<Pool, Strin
         .dbname(&config.dbname)
         .host(&config.host)
         .port(config.port)
-        .user(&config.user);
+        .user(&config.user)
+        .options(format!(
+            "-csearch_path={}",
+            config.search_path.as_ref().unwrap_or(&"public".to_string())
+        ));
     if let Some(password) = &config.password {
         pg_config.password(password);
     }

@@ -72,10 +72,10 @@ impl Service {
             config: config.clone(),
             ctx: ctx.clone(),
             pg_pools: PgConnectionPools {
-                ordinals: new_pg_connection_pool(&config.ordinals_db.to_conn_config()).unwrap(),
+                ordinals: new_pg_connection_pool(&config.ordinals_db).unwrap(),
                 brc20: match (config.meta_protocols.brc20, &config.brc20_db) {
                     (true, Some(brc20_db)) => {
-                        Some(new_pg_connection_pool(&brc20_db.to_conn_config()).unwrap())
+                        Some(new_pg_connection_pool(&brc20_db).unwrap())
                     }
                     _ => None,
                 },

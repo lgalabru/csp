@@ -12,12 +12,12 @@ use crate::{config::Config, core::meta_protocols::brc20::brc20_pg, try_info};
 pub async fn migrate_dbs(config: &Config, ctx: &Context) -> Result<(), String> {
     {
         try_info!(ctx, "Running ordinals DB migrations");
-        let mut pg_client = pg_connect_with_retry(&config.ordinals_db.to_conn_config()).await;
+        let mut pg_client = pg_connect_with_retry(&config.ordinals_db).await;
         ordinals_pg::migrate(&mut pg_client).await?;
     }
     if let (Some(brc20_db), true) = (&config.brc20_db, config.meta_protocols.brc20) {
         try_info!(ctx, "Running brc20 DB migrations");
-        let mut pg_client = pg_connect_with_retry(&brc20_db.to_conn_config()).await;
+        let mut pg_client = pg_connect_with_retry(&brc20_db).await;
         brc20_pg::migrate(&mut pg_client).await?;
     }
     Ok(())
@@ -31,6 +31,7 @@ pub fn pg_test_config() -> chainhook_postgres::PgConnectionConfig {
         port: 5432,
         user: "postgres".to_string(),
         password: Some("postgres".to_string()),
+        search_path: None,
     }
 }
 

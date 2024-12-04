@@ -1,4 +1,4 @@
-use chainhook_postgres::PgConnectionConfig;
+pub use chainhook_postgres::PgConnectionConfig;
 use chainhook_sdk::observer::EventObserverConfig;
 use chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
@@ -21,8 +21,8 @@ pub const DEFAULT_BRC20_LRU_CACHE_SIZE: usize = 50_000;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub storage: StorageConfig,
-    pub ordinals_db: PostgresConfig,
-    pub brc20_db: Option<PostgresConfig>,
+    pub ordinals_db: PgConnectionConfig,
+    pub brc20_db: Option<PgConnectionConfig>,
     pub http_api: PredicatesApi,
     pub resources: ResourcesConfig,
     pub network: IndexerConfig,
@@ -34,27 +34,6 @@ pub struct Config {
 #[derive(Clone, Debug)]
 pub struct MetaProtocolsConfig {
     pub brc20: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct PostgresConfig {
-    pub database: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: Option<String>,
-}
-
-impl PostgresConfig {
-    pub fn to_conn_config(&self) -> PgConnectionConfig {
-        PgConnectionConfig {
-            dbname: self.database.clone(),
-            host: self.host.clone(),
-            port: self.port,
-            user: self.username.clone(),
-            password: self.password.clone(),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -191,12 +170,13 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
-            ordinals_db: PostgresConfig {
-                database: "ordinals".to_string(),
+            ordinals_db: PgConnectionConfig {
+                dbname: "ordinals".to_string(),
                 host: "localhost".to_string(),
                 port: 5432,
-                username: "postgres".to_string(),
+                user: "postgres".to_string(),
                 password: Some("postgres".to_string()),
+                search_path: None,
             },
             brc20_db: None,
             http_api: PredicatesApi::Off,
@@ -234,12 +214,13 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
-            ordinals_db: PostgresConfig {
-                database: "ordinals".to_string(),
+            ordinals_db: PgConnectionConfig {
+                dbname: "ordinals".to_string(),
                 host: "localhost".to_string(),
                 port: 5432,
-                username: "postgres".to_string(),
+                user: "postgres".to_string(),
                 password: Some("postgres".to_string()),
+                search_path: None,
             },
             brc20_db: None,
             http_api: PredicatesApi::Off,
@@ -277,12 +258,13 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
-            ordinals_db: PostgresConfig {
-                database: "ordinals".to_string(),
+            ordinals_db: PgConnectionConfig {
+                dbname: "ordinals".to_string(),
                 host: "localhost".to_string(),
                 port: 5432,
-                username: "postgres".to_string(),
+                user: "postgres".to_string(),
                 password: Some("postgres".to_string()),
+                search_path: None,
             },
             brc20_db: None,
             http_api: PredicatesApi::Off,
