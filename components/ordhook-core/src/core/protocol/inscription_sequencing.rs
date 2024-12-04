@@ -21,10 +21,10 @@ use fxhash::FxHasher;
 use crate::{
     config::Config,
     core::{meta_protocols::brc20::brc20_pg, resolve_absolute_pointer},
-    db::{cursor::TransactionBytesCursor, ordinals_pg},
+    db::{self, cursor::TransactionBytesCursor, ordinals_pg},
     ord::height::Height,
     service::PgConnectionPools,
-    try_error, try_info,
+    try_debug, try_error, try_info,
     utils::format_inscription_id,
 };
 
@@ -81,13 +81,13 @@ pub fn parallelize_inscription_data_computations(
     );
 
     let (transactions_ids, l1_cache_hits) = get_transactions_to_process(block, cache_l1);
-
     let has_transactions_to_process = !transactions_ids.is_empty() || !l1_cache_hits.is_empty();
-
-    let thread_pool_capacity = config.resources.get_optimal_thread_pool_capacity();
-
-    // Nothing to do? early return
     if !has_transactions_to_process {
+        try_debug!(
+            inner_ctx,
+            "No reveal transactions found at block #{}",
+            block.block_identifier.index
+        );
         return Ok(false);
     }
 
@@ -96,7 +96,9 @@ pub fn parallelize_inscription_data_computations(
 
     let mut tx_thread_pool = vec![];
     let mut thread_pool_handles = vec![];
+    let blocks_db = Arc::new(db::blocks::open_blocks_db_with_retry(false, &config, &ctx));
 
+    let thread_pool_capacity = config.resources.get_optimal_thread_pool_capacity();
     for thread_index in 0..thread_pool_capacity {
         let (tx, rx) = channel();
         tx_thread_pool.push(tx);
@@ -106,8 +108,8 @@ pub fn parallelize_inscription_data_computations(
         let moved_config = config.clone();
 
         let local_cache = cache_l2.clone();
+        let local_db = blocks_db.clone();
 
-        // TODO(rafaelcr): Share a single rocksDB connection across threads since it's read only.
         let handle = hiro_system_kit::thread_named("Worker")
             .spawn(move || {
                 while let Ok(Some((
@@ -125,6 +127,7 @@ pub fn parallelize_inscription_data_computations(
                             input_index,
                             inscription_pointer,
                             &local_cache,
+                            &local_db,
                             &moved_config,
                             &moved_ctx,
                         );

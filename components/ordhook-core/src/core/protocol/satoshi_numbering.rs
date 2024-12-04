@@ -6,7 +6,7 @@ use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::db::blocks::{find_pinned_block_bytes_at_block_height, open_blocks_db_with_retry};
+use crate::db::blocks::find_pinned_block_bytes_at_block_height;
 
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
 use crate::ord::height::Height;
@@ -50,14 +50,14 @@ pub fn compute_satoshi_number(
     traversals_cache: &Arc<
         DashMap<(u32, [u8; 8]), TransactionBytesCursor, BuildHasherDefault<FxHasher>>,
     >,
-    config: &Config,
+    blocks_db: &rocksdb::DB,
+    _config: &Config,
     ctx: &Context,
 ) -> Result<(TraversalResult, u64, Vec<(u32, [u8; 8], usize)>), String> {
     let mut ordinal_offset = inscription_pointer;
     let ordinal_block_number = block_identifier.index as u32;
     let txid = transaction_identifier.get_8_hash_bytes();
     let mut back_track = vec![];
-    let blocks_db = open_blocks_db_with_retry(false, &config, &ctx);
 
     let (mut tx_cursor, mut ordinal_block_number) = match traversals_cache
         .get(&(block_identifier.index as u32, txid.clone()))
@@ -434,6 +434,7 @@ mod test {
             0,
             8_000,
             &Arc::new(cache),
+            &blocks_db,
             &config,
             &ctx,
         ) else {
@@ -554,6 +555,7 @@ mod test {
             0,
             8_000,
             &Arc::new(cache),
+            &blocks_db,
             &config,
             &ctx,
         ) else {
@@ -670,6 +672,7 @@ mod test {
             0,
             8_000,
             &Arc::new(cache),
+            &blocks_db,
             &config,
             &ctx,
         ) else {
@@ -690,7 +693,7 @@ mod test {
         let ctx = Context::empty();
         let config = Config::test_default();
         drop_all_dbs(&config);
-        let _ = open_blocks_db_with_retry(true, &config, &ctx);
+        let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
         let cache = new_traversals_lazy_cache(100);
 
         store_tx_in_traversals_cache(
@@ -727,6 +730,7 @@ mod test {
             0,
             8_000,
             &Arc::new(cache),
+            &blocks_db,
             &config,
             &ctx,
         ) else {
@@ -841,6 +845,7 @@ mod test {
             0,
             8_000,
             &Arc::new(cache),
+            &blocks_db,
             &config,
             &ctx,
         ) else {
