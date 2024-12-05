@@ -56,7 +56,7 @@ impl DbInscription {
             mime_type: reveal.content_type.split(';').nth(0).unwrap().to_string(),
             content_type: reveal.content_type.clone(),
             content_length: PgBigIntU32(reveal.content_length as u32),
-            content: reveal.content_bytes.as_bytes().to_vec(),
+            content: reveal.content_bytes[2..].as_bytes().to_vec(),
             fee: PgNumericU64(reveal.inscription_fee),
             curse_type: reveal.curse_type.as_ref().map(|c| match c {
                 OrdinalInscriptionCurseType::DuplicateField => "duplicate_field".to_string(),
