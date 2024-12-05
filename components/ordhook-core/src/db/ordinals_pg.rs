@@ -731,7 +731,7 @@ pub async fn insert_block<T: GenericClient>(
                     );
                     let mime_type = inscription.mime_type.clone();
                     let genesis_address = inscription.address.clone();
-                    let recursions = DbInscriptionRecursion::from_reveal(reveal);
+                    let recursions = DbInscriptionRecursion::from_reveal(reveal)?;
                     let is_recursive = recursions.len() > 0;
                     if is_recursive {
                         inscription.recursive = true;
