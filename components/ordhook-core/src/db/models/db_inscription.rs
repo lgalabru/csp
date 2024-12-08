@@ -43,6 +43,12 @@ impl DbInscription {
         tx_index: usize,
         timestamp: u32,
     ) -> Self {
+        // Remove null bytes from `content` and `content_type`
+        let mut content = hex::decode(&reveal.content_bytes[2..]).unwrap();
+        content.retain(|&x| x != 0);
+        let mut content_type_bytes = reveal.content_type.clone().into_bytes();
+        content_type_bytes.retain(|&x| x != 0);
+        let content_type = String::from_utf8(content_type_bytes).unwrap();
         DbInscription {
             inscription_id: reveal.inscription_id.clone(),
             ordinal_number: PgNumericU64(reveal.ordinal_number),
@@ -53,10 +59,10 @@ impl DbInscription {
             tx_id: tx_identifier.hash[2..].to_string(),
             tx_index: PgBigIntU32(tx_index as u32),
             address: reveal.inscriber_address.clone(),
-            mime_type: reveal.content_type.split(';').nth(0).unwrap().to_string(),
-            content_type: reveal.content_type.clone(),
+            mime_type: content_type.split(';').nth(0).unwrap().to_string(),
+            content_type,
             content_length: PgBigIntU32(reveal.content_length as u32),
-            content: hex::decode(&reveal.content_bytes[2..]).unwrap(),
+            content,
             fee: PgNumericU64(reveal.inscription_fee),
             curse_type: reveal.curse_type.as_ref().map(|c| match c {
                 OrdinalInscriptionCurseType::DuplicateField => "duplicate_field".to_string(),
