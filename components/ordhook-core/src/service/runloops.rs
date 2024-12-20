@@ -8,12 +8,8 @@ use chainhook_sdk::{
 use threadpool::ThreadPool;
 
 use crate::{
-    config::Config,
-    scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate,
-    service::observers::{
-        open_readwrite_observers_db_conn_or_panic, update_observer_streaming_enabled,
-    },
-    try_error, try_info,
+    config::Config, scan::bitcoin::scan_bitcoin_chainstate_via_rpc_using_predicate, try_error,
+    try_info,
 };
 
 use super::PgConnectionPools;
@@ -47,16 +43,6 @@ pub fn start_bitcoin_scan_runloop(
                     try_error!(
                         moved_ctx,
                         "Unable to evaluate predicate on Bitcoin chainstate: {e}",
-                    );
-
-                    // Update predicate
-                    let mut observers_db_conn =
-                        open_readwrite_observers_db_conn_or_panic(&moved_config, &moved_ctx);
-                    update_observer_streaming_enabled(
-                        &predicate_spec.uuid,
-                        false,
-                        &mut observers_db_conn,
-                        &moved_ctx,
                     );
                     return;
                 }

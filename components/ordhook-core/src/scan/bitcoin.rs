@@ -5,9 +5,6 @@ use crate::core::protocol::inscription_parsing::{
 };
 use crate::core::protocol::inscription_sequencing::augment_block_with_pre_computed_ordinals_data;
 use crate::db::ordinals_pg;
-use crate::service::observers::{
-    open_readwrite_observers_db_conn_or_panic, update_observer_progress,
-};
 use crate::service::PgConnectionPools;
 use crate::utils::bitcoind::bitcoind_get_block_height;
 use chainhook_postgres::with_pg_client;
@@ -23,7 +20,7 @@ use chainhook_sdk::observer::{gather_proofs, DataHandlerEvent, EventObserverConf
 use chainhook_sdk::types::{
     BitcoinBlockData, BitcoinChainEvent, BitcoinChainUpdatedWithBlocksData,
 };
-use chainhook_sdk::utils::{file_append, send_request, BlockHeights, Context};
+use chainhook_sdk::utils::{BlockHeights, Context};
 use std::collections::HashMap;
 
 pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
@@ -136,15 +133,6 @@ pub async fn scan_bitcoin_chainstate_via_rpc_using_predicate(
             Ok(actions) => actions_triggered += actions,
             Err(e) => return Err(format!("Scan aborted: {e}")),
         }
-        {
-            let observers_db_conn = open_readwrite_observers_db_conn_or_panic(&config, &ctx);
-            update_observer_progress(
-                &predicate_spec.uuid,
-                current_block_height,
-                &observers_db_conn,
-                &ctx,
-            )
-        }
         if block_heights_to_scan.is_empty() && floating_end_block {
             let bitcoind_chain_tip = bitcoind_get_block_height(config, ctx);
             let new_tip = match predicate_spec.end_block {
@@ -207,10 +195,6 @@ pub async fn execute_predicates_action<'a>(
             Ok(action) => {
                 actions_triggered += 1;
                 let result = match action {
-                    BitcoinChainhookOccurrence::Http(request, _data) => {
-                        send_request(request, 60, 3, &ctx).await
-                    }
-                    BitcoinChainhookOccurrence::File(path, bytes) => file_append(path, bytes, &ctx),
                     BitcoinChainhookOccurrence::Data(payload) => {
                         if let Some(ref tx) = config.data_handler_tx {
                             match tx.send(DataHandlerEvent::Process(payload)) {
@@ -221,6 +205,7 @@ pub async fn execute_predicates_action<'a>(
                             Ok(())
                         }
                     }
+                    _ => Ok(()),
                 };
                 match result {
                     Ok(_) => {}

@@ -1,8 +1,6 @@
-mod http_api;
-pub mod observers;
 mod runloops;
 
-use crate::config::{Config, PredicatesApi};
+use crate::config::Config;
 use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
 use crate::core::pipeline::bitcoind_download_blocks;
 use crate::core::pipeline::processors::block_archiving::start_block_archiving_processor;
@@ -19,8 +17,6 @@ use crate::db::blocks::{
 };
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
 use crate::db::ordinals_pg;
-use crate::scan::bitcoin::process_block_with_predicates;
-use crate::service::observers::create_and_consolidate_chainhook_config_with_predicates;
 use crate::service::runloops::start_bitcoin_scan_runloop;
 use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
@@ -28,21 +24,14 @@ use crate::{try_error, try_info};
 use chainhook_postgres::deadpool_postgres::Pool;
 use chainhook_postgres::{new_pg_connection_pool, with_pg_client, with_pg_transaction};
 use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
-use chainhook_sdk::chainhooks::types::{
-    BitcoinChainhookSpecification, ChainhookConfig, ChainhookFullSpecification,
-    ChainhookSpecification,
-};
 use chainhook_sdk::observer::{
-    start_event_observer, BitcoinBlockDataCached, EventObserverConfig, ObserverCommand,
-    ObserverEvent, ObserverSidecar,
+    start_event_observer, BitcoinBlockDataCached, ObserverCommand, ObserverEvent, ObserverSidecar,
 };
-use chainhook_sdk::types::{BitcoinBlockData, BlockIdentifier};
+use chainhook_sdk::types::BlockIdentifier;
 use chainhook_sdk::utils::{BlockHeights, Context};
-use crossbeam_channel::unbounded;
-use crossbeam_channel::{select, Sender};
+use crossbeam_channel::select;
 use dashmap::DashMap;
 use fxhash::FxHasher;
-use http_api::start_observers_http_server;
 
 use std::collections::BTreeMap;
 use std::hash::BuildHasherDefault;
@@ -71,9 +60,7 @@ impl Service {
             pg_pools: PgConnectionPools {
                 ordinals: new_pg_connection_pool(&config.ordinals_db).unwrap(),
                 brc20: match (config.meta_protocols.brc20, &config.brc20_db) {
-                    (true, Some(brc20_db)) => {
-                        Some(new_pg_connection_pool(&brc20_db).unwrap())
-                    }
+                    (true, Some(brc20_db)) => Some(new_pg_connection_pool(&brc20_db).unwrap()),
                     _ => None,
                 },
             },
@@ -96,15 +83,7 @@ impl Service {
         Ok(chain_tip)
     }
 
-    pub async fn run(
-        &mut self,
-        observer_specs: Vec<BitcoinChainhookSpecification>,
-        predicate_activity_relayer: Option<
-            crossbeam_channel::Sender<BitcoinChainhookOccurrencePayload>,
-        >,
-        check_blocks_integrity: bool,
-        stream_indexing_to_observers: bool,
-    ) -> Result<(), String> {
+    pub async fn run(&mut self, check_blocks_integrity: bool) -> Result<(), String> {
         // 1: Initialize Prometheus monitoring server.
         if let Some(port) = self.config.network.prometheus_monitoring_port {
             let registry_moved = self.prometheus.registry.clone();
@@ -133,25 +112,10 @@ impl Service {
 
         // 2: Catch-up the ordinals index to Bitcoin chain tip.
         let mut event_observer_config = self.config.get_event_observer_config();
-        let block_post_processor = if stream_indexing_to_observers && !observer_specs.is_empty() {
-            let mut chainhook_config: ChainhookConfig = ChainhookConfig::new();
-            let specs = observer_specs.clone();
-            for mut observer_spec in specs.into_iter() {
-                observer_spec.enabled = true;
-                let spec = ChainhookSpecification::Bitcoin(observer_spec);
-                chainhook_config.register_specification(spec)?;
-            }
-            event_observer_config.chainhook_config = Some(chainhook_config);
-            let block_tx = start_observer_forwarding(&event_observer_config, &self.ctx);
-            Some(block_tx)
-        } else {
-            None
-        };
         if check_blocks_integrity {
             self.check_blocks_db_integrity().await?;
         }
-        self.catch_up_to_bitcoin_chain_tip(block_post_processor)
-            .await?;
+        self.catch_up_to_bitcoin_chain_tip().await?;
         try_info!(self.ctx, "Service: Streaming blocks start");
 
         // 3: Set up the real-time ZMQ Bitcoin block streaming channels and start listening.
@@ -173,22 +137,16 @@ impl Service {
                 .unwrap_or(0))
         })
         .await?;
-        let (chainhook_config, outdated_observers) =
-            create_and_consolidate_chainhook_config_with_predicates(
-                observer_specs,
-                chain_tip,
-                predicate_activity_relayer.is_some(),
-                &self.prometheus,
-                &self.config,
-                &self.ctx,
-            )?;
-        // Dispatch required replays
-        for outdated_observer_spec in outdated_observers.into_iter() {
-            let _ = observer_command_tx.send(ObserverCommand::RegisterPredicate(
-                ChainhookFullSpecification::Bitcoin(outdated_observer_spec),
-            ));
-        }
-        event_observer_config.chainhook_config = Some(chainhook_config);
+        // let (chainhook_config, outdated_observers) =
+        //     create_and_consolidate_chainhook_config_with_predicates(
+        //         observer_specs,
+        //         chain_tip,
+        //         predicate_activity_relayer.is_some(),
+        //         &self.prometheus,
+        //         &self.config,
+        //         &self.ctx,
+        //     )?;
+        // event_observer_config.chainhook_config = Some(chainhook_config);
 
         let _ = start_event_observer(
             event_observer_config,
@@ -204,7 +162,7 @@ impl Service {
         self.start_main_runloop_with_dynamic_predicates(
             &observer_command_tx,
             observer_event_rx,
-            predicate_activity_relayer,
+            None,
         )?;
         Ok(())
     }
@@ -243,24 +201,6 @@ impl Service {
                 );
             })
             .expect("unable to spawn thread");
-
-        if let PredicatesApi::On(_) = self.config.http_api {
-            let moved_config = self.config.clone();
-            let moved_ctx = self.ctx.clone();
-            let moved_observer_commands_tx = observer_command_tx.clone();
-            let moved_observer_event_rx = observer_event_rx.clone();
-            let moved_prometheus = self.prometheus.clone();
-            let _ = hiro_system_kit::thread_named("HTTP Observers API").spawn(move || {
-                let _ = hiro_system_kit::nestable_block_on(start_observers_http_server(
-                    &moved_config,
-                    &moved_observer_commands_tx,
-                    moved_observer_event_rx,
-                    bitcoin_scan_op_tx,
-                    &moved_prometheus,
-                    &moved_ctx,
-                ));
-            });
-        }
 
         // Block the main thread indefinitely until the chainhook-sdk channel is closed.
         loop {
@@ -379,10 +319,7 @@ impl Service {
     }
 
     /// Synchronizes and indexes all databases until their block height matches bitcoind's block height.
-    pub async fn catch_up_to_bitcoin_chain_tip(
-        &self,
-        block_post_processor: Option<crossbeam_channel::Sender<BitcoinBlockData>>,
-    ) -> Result<(), String> {
+    pub async fn catch_up_to_bitcoin_chain_tip(&self) -> Result<(), String> {
         // 0: Make sure bitcoind is synchronized.
         bitcoind_wait_for_chain_tip(&self.config, &self.ctx);
 
@@ -390,12 +327,8 @@ impl Service {
         if let Some((start_block, end_block)) =
             should_sync_rocks_db(&self.config, &self.pg_pools, &self.ctx).await?
         {
-            let blocks_post_processor = start_block_archiving_processor(
-                &self.config,
-                &self.ctx,
-                true,
-                block_post_processor.clone(),
-            );
+            let blocks_post_processor =
+                start_block_archiving_processor(&self.config, &self.ctx, true, None);
             try_info!(
                 self.ctx,
                 "Service: Compressing blocks from #{start_block} to #{end_block}"
@@ -427,7 +360,7 @@ impl Service {
                 &self.config,
                 &self.pg_pools,
                 &self.ctx,
-                block_post_processor.clone(),
+                None,
                 &self.prometheus,
             );
             try_info!(
@@ -452,41 +385,6 @@ impl Service {
         try_info!(self.ctx, "Service: Index has reached bitcoin chain tip");
         Ok(())
     }
-}
-
-pub fn start_observer_forwarding(
-    event_observer_config: &EventObserverConfig,
-    ctx: &Context,
-) -> Sender<BitcoinBlockData> {
-    let (tx_replayer, rx_replayer) = unbounded();
-    let mut moved_event_observer_config = event_observer_config.clone();
-    let moved_ctx = ctx.clone();
-
-    let _ = hiro_system_kit::thread_named("Initial predicate processing")
-        .spawn(move || {
-            if let Some(mut chainhook_config) = moved_event_observer_config.chainhook_config.take()
-            {
-                let mut bitcoin_predicates_ref: Vec<&BitcoinChainhookSpecification> = vec![];
-                for bitcoin_predicate in chainhook_config.bitcoin_chainhooks.iter_mut() {
-                    bitcoin_predicates_ref.push(bitcoin_predicate);
-                }
-                while let Ok(block) = rx_replayer.recv() {
-                    let future = process_block_with_predicates(
-                        block,
-                        &bitcoin_predicates_ref,
-                        &moved_event_observer_config,
-                        &moved_ctx,
-                    );
-                    let res = hiro_system_kit::nestable_block_on(future);
-                    if let Err(_) = res {
-                        error!(moved_ctx.expect_logger(), "Initial ingestion failing");
-                    }
-                }
-            }
-        })
-        .expect("unable to spawn thread");
-
-    tx_replayer
 }
 
 pub async fn chainhook_sidecar_mutate_blocks(

@@ -178,18 +178,9 @@ struct StartCommand {
         conflicts_with = "regtest"
     )]
     pub config_path: Option<String>,
-    /// Specify relative path of the chainhooks (yaml format) to evaluate
-    #[clap(long = "post-to")]
-    pub post_to: Vec<String>,
-    /// HTTP Auth token
-    #[clap(long = "auth-token")]
-    pub auth_token: Option<String>,
     /// Check blocks integrity
     #[clap(long = "check-blocks-integrity")]
     pub block_integrity_check: bool,
-    /// Stream indexing to observers
-    #[clap(long = "stream-indexing")]
-    pub stream_indexing_to_observers: bool,
 }
 
 #[derive(Subcommand, PartialEq, Clone, Debug)]
@@ -314,27 +305,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 let start_block = service.get_index_chain_tip().await?;
                 try_info!(ctx, "Index chain tip is at #{start_block}");
 
-                let mut predicates = vec![];
-                for post_to in cmd.post_to.iter() {
-                    let predicate = build_predicate_from_cli(
-                        &config,
-                        post_to,
-                        None,
-                        Some(start_block),
-                        cmd.auth_token.clone(),
-                        true,
-                    )?;
-                    predicates.push(predicate);
-                }
-
-                return service
-                    .run(
-                        predicates,
-                        None,
-                        cmd.block_integrity_check,
-                        cmd.stream_indexing_to_observers,
-                    )
-                    .await;
+                return service.run(cmd.block_integrity_check).await;
             }
         },
         Command::Config(subcmd) => match subcmd {
@@ -362,7 +333,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             migrate_dbs(&config, ctx).await?;
             let service = Service::new(&config, ctx);
-            service.catch_up_to_bitcoin_chain_tip(None).await?;
+            service.catch_up_to_bitcoin_chain_tip().await?;
         }
         Command::Db(OrdhookDbCommand::Repair(subcmd)) => match subcmd {
             RepairCommand::Blocks(cmd) => {
