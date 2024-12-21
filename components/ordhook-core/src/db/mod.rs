@@ -37,7 +37,7 @@ pub fn pg_test_config() -> chainhook_postgres::PgConnectionConfig {
 
 #[cfg(test)]
 pub fn pg_test_connection_pool() -> chainhook_postgres::deadpool_postgres::Pool {
-    chainhook_postgres::new_pg_connection_pool(&pg_test_config()).unwrap()
+    chainhook_postgres::pg_pool(&pg_test_config()).unwrap()
 }
 
 #[cfg(test)]

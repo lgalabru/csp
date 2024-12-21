@@ -1,5 +1,3 @@
-mod runloops;
-
 use crate::config::Config;
 use crate::core::meta_protocols::brc20::cache::{brc20_new_cache, Brc20MemoryCache};
 use crate::core::pipeline::bitcoind_download_blocks;
@@ -17,15 +15,13 @@ use crate::db::blocks::{
 };
 use crate::db::cursor::{BlockBytesCursor, TransactionBytesCursor};
 use crate::db::ordinals_pg;
-use crate::service::runloops::start_bitcoin_scan_runloop;
 use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_error, try_info};
 use chainhook_postgres::deadpool_postgres::Pool;
-use chainhook_postgres::{new_pg_connection_pool, with_pg_client, with_pg_transaction};
-use chainhook_sdk::chainhooks::bitcoin::BitcoinChainhookOccurrencePayload;
+use chainhook_postgres::{pg_pool, pg_begin, pg_pool_client};
 use chainhook_sdk::observer::{
-    start_event_observer, BitcoinBlockDataCached, ObserverCommand, ObserverEvent, ObserverSidecar,
+    start_event_observer, BitcoinBlockDataCached, ObserverEvent, ObserverSidecar,
 };
 use chainhook_sdk::types::BlockIdentifier;
 use chainhook_sdk::utils::{BlockHeights, Context};
@@ -58,9 +54,9 @@ impl Service {
             config: config.clone(),
             ctx: ctx.clone(),
             pg_pools: PgConnectionPools {
-                ordinals: new_pg_connection_pool(&config.ordinals_db).unwrap(),
+                ordinals: pg_pool(&config.ordinals_db).unwrap(),
                 brc20: match (config.meta_protocols.brc20, &config.brc20_db) {
-                    (true, Some(brc20_db)) => Some(new_pg_connection_pool(&brc20_db).unwrap()),
+                    (true, Some(brc20_db)) => Some(pg_pool(&brc20_db).unwrap()),
                     _ => None,
                 },
             },
@@ -70,17 +66,21 @@ impl Service {
     /// Returns the last block height we have indexed. This only looks at the max index chain tip, not at the blocks DB chain tip.
     /// Adjusts for starting index height depending on Bitcoin network.
     pub async fn get_index_chain_tip(&self) -> Result<u64, String> {
-        let chain_tip = with_pg_transaction(&self.pg_pools.ordinals, |client| async move {
-            // Update chain tip to match first inscription height at least.
-            let db_height = ordinals_pg::get_chain_tip_block_height(client)
-                .await?
-                .unwrap_or(0)
-                .max(first_inscription_height(&self.config) - 1);
-            ordinals_pg::update_chain_tip(db_height, client).await?;
-            Ok(db_height)
-        })
-        .await?;
-        Ok(chain_tip)
+        let mut ord_client = pg_pool_client(&self.pg_pools.ordinals).await?;
+        let ord_tx = pg_begin(&mut ord_client).await?;
+
+        // Update chain tip to match first inscription height at least.
+        let db_height = ordinals_pg::get_chain_tip_block_height(&ord_tx)
+            .await?
+            .unwrap_or(0)
+            .max(first_inscription_height(&self.config) - 1);
+        ordinals_pg::update_chain_tip(db_height, &ord_tx).await?;
+
+        ord_tx
+            .commit()
+            .await
+            .map_err(|e| format!("unable to commit get_index_chain_tip transaction: {e}"))?;
+        Ok(db_height)
     }
 
     pub async fn run(&mut self, check_blocks_integrity: bool) -> Result<(), String> {
@@ -96,22 +96,22 @@ impl Service {
                 ));
             });
         }
-        let (max_inscription_number, chain_tip) =
-            with_pg_transaction(&self.pg_pools.ordinals, |client| async move {
-                let inscription_number = ordinals_pg::get_highest_inscription_number(client)
-                    .await?
-                    .unwrap_or(0);
-                let chain_tip = ordinals_pg::get_chain_tip_block_height(client)
-                    .await?
-                    .unwrap_or(0);
-                Ok((inscription_number, chain_tip))
-            })
-            .await?;
+        let (max_inscription_number, chain_tip) = {
+            let ord_client = pg_pool_client(&self.pg_pools.ordinals).await?;
+
+            let inscription_number = ordinals_pg::get_highest_inscription_number(&ord_client)
+                .await?
+                .unwrap_or(0);
+            let chain_tip = ordinals_pg::get_chain_tip_block_height(&ord_client)
+                .await?
+                .unwrap_or(0);
+
+            (inscription_number, chain_tip)
+        };
         self.prometheus
             .initialize(0, max_inscription_number as u64, chain_tip);
 
         // 2: Catch-up the ordinals index to Bitcoin chain tip.
-        let mut event_observer_config = self.config.get_event_observer_config();
         if check_blocks_integrity {
             self.check_blocks_db_integrity().await?;
         }
@@ -131,12 +131,12 @@ impl Service {
         // Observers handling
         // 1) update event_observer_config with observers ready to be used
         // 2) catch-up outdated observers by dispatching replays
-        let chain_tip = with_pg_client(&self.pg_pools.ordinals, |client| async move {
-            Ok(ordinals_pg::get_chain_tip_block_height(&client)
-                .await?
-                .unwrap_or(0))
-        })
-        .await?;
+        // let chain_tip = with_pg_client(&self.pg_pools.ordinals, |client| async move {
+        //     Ok(ordinals_pg::get_chain_tip_block_height(&client)
+        //         .await?
+        //         .unwrap_or(0))
+        // })
+        // .await?;
         // let (chainhook_config, outdated_observers) =
         //     create_and_consolidate_chainhook_config_with_predicates(
         //         observer_specs,
@@ -148,6 +148,7 @@ impl Service {
         //     )?;
         // event_observer_config.chainhook_config = Some(chainhook_config);
 
+        let event_observer_config = self.config.get_event_observer_config();
         let _ = start_event_observer(
             event_observer_config,
             observer_command_tx.clone(),
@@ -158,51 +159,7 @@ impl Service {
             inner_ctx,
         );
 
-        // 4: Start the HTTP predicate server.
-        self.start_main_runloop_with_dynamic_predicates(
-            &observer_command_tx,
-            observer_event_rx,
-            None,
-        )?;
-        Ok(())
-    }
-
-    /// Rolls back index data for the specified block heights.
-    pub async fn rollback(&self, block_heights: &Vec<u64>) -> Result<(), String> {
-        for block_height in block_heights.iter() {
-            rollback_block(*block_height, &self.config, &self.pg_pools, &self.ctx).await?;
-        }
-        Ok(())
-    }
-
-    /// Starts the predicates HTTP server and the main Bitcoin processing runloop that will serve indexed Bitcoin blocks to
-    /// clients.
-    pub fn start_main_runloop_with_dynamic_predicates(
-        &self,
-        observer_command_tx: &std::sync::mpsc::Sender<ObserverCommand>,
-        observer_event_rx: crossbeam_channel::Receiver<ObserverEvent>,
-        _predicate_activity_relayer: Option<
-            crossbeam_channel::Sender<BitcoinChainhookOccurrencePayload>,
-        >,
-    ) -> Result<(), String> {
-        let (bitcoin_scan_op_tx, bitcoin_scan_op_rx) = crossbeam_channel::unbounded();
-        let ctx = self.ctx.clone();
-        let config = self.config.clone();
-        let pg_pools = self.pg_pools.clone();
-        let observer_command_tx_moved = observer_command_tx.clone();
-        let _ = hiro_system_kit::thread_named("Bitcoin scan runloop")
-            .spawn(move || {
-                start_bitcoin_scan_runloop(
-                    &config,
-                    bitcoin_scan_op_rx,
-                    observer_command_tx_moved,
-                    &pg_pools,
-                    &ctx,
-                );
-            })
-            .expect("unable to spawn thread");
-
-        // Block the main thread indefinitely until the chainhook-sdk channel is closed.
+        // 4: Block the main thread.
         loop {
             let event = match observer_event_rx.recv() {
                 Ok(cmd) => cmd,
@@ -219,7 +176,14 @@ impl Service {
                 _ => {}
             }
         }
+        Ok(())
+    }
 
+    /// Rolls back index data for the specified block heights.
+    pub async fn rollback(&self, block_heights: &Vec<u64>) -> Result<(), String> {
+        for block_height in block_heights.iter() {
+            rollback_block(*block_height, &self.config, &self.pg_pools, &self.ctx).await?;
+        }
         Ok(())
     }
 
@@ -285,13 +249,11 @@ impl Service {
         bitcoind_wait_for_chain_tip(&self.config, &self.ctx);
         let (tip, missing_blocks) = {
             let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
+            let ord_client = pg_pool_client(&self.pg_pools.ordinals).await?;
 
-            let tip = with_pg_client(&self.pg_pools.ordinals, |client| async move {
-                Ok(ordinals_pg::get_chain_tip_block_height(&client).await?)
-            })
-            .await?
-            .unwrap_or(0);
+            let tip = ordinals_pg::get_chain_tip_block_height(&ord_client).await?.unwrap_or(0);
             let missing_blocks = find_missing_blocks(&blocks_db, 0, tip as u32, &self.ctx);
+
             (tip, missing_blocks)
         };
         if !missing_blocks.is_empty() {

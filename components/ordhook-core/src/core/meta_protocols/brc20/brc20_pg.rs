@@ -545,8 +545,8 @@ pub async fn rollback_block_operations<T: GenericClient>(
 mod test {
     use chainhook_postgres::{
         deadpool_postgres::GenericClient,
+        pg_begin, pg_pool_client,
         types::{PgBigIntU32, PgNumericU128, PgNumericU64, PgSmallIntU8},
-        with_pg_transaction,
     };
     use chainhook_sdk::types::{
         BlockIdentifier, OrdinalInscriptionTransferDestination, TransactionIdentifier,
@@ -633,7 +633,9 @@ mod test {
     async fn test_apply_and_rollback() -> Result<(), String> {
         let mut pg_client = pg_test_connection().await;
         brc20_pg::migrate(&mut pg_client).await?;
-        with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
             let mut cache = Brc20MemoryCache::new(100);
 
             // Deploy
@@ -661,8 +663,8 @@ mod test {
                     },
                     0,
                 )?;
-                cache.db_cache.flush(client).await?;
-                let db_token = brc20_pg::get_token(&"pepe".to_string(), client)
+                cache.db_cache.flush(&client).await?;
+                let db_token = brc20_pg::get_token(&"pepe".to_string(), &client)
                     .await?
                     .unwrap();
                 assert_eq!(
@@ -691,16 +693,20 @@ mod test {
                         timestamp: PgBigIntU32(0)
                     }
                 );
-                assert_eq!((1, 0, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!((1, 0, 0, 0), get_counts_by_operation(&client).await);
                 assert_eq!(
                     (1, 0, 0, 0),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
                     Some((PgNumericU128(0), PgNumericU128(0), PgNumericU128(0))),
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
             }
             // Mint
@@ -726,21 +732,21 @@ mod test {
                                     .to_string(),
                         },
                         0,
-                        client,
+                        &client,
                     )
                     .await?;
-                cache.db_cache.flush(client).await?;
-                let operations = get_operations_at_block(800001, client).await?;
+                cache.db_cache.flush(&client).await?;
+                let operations = get_operations_at_block(800001, &client).await?;
                 assert_eq!(1, operations.len());
-                assert_eq!((1, 1, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!((1, 1, 0, 0), get_counts_by_operation(&client).await);
                 assert_eq!(
                     (1, 1, 0, 0),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
                     Some(1000_000000000000000000),
-                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                    get_token_minted_supply(&"pepe".to_string(), &client).await?
                 );
                 assert_eq!(
                     Some((
@@ -748,8 +754,12 @@ mod test {
                         PgNumericU128(0),
                         PgNumericU128(1000_000000000000000000)
                     )),
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
             }
             // Transfer
@@ -778,18 +788,18 @@ mod test {
                                     .to_string(),
                         },
                         0,
-                        client,
+                        &client,
                     )
                     .await?;
-                cache.db_cache.flush(client).await?;
-                assert_eq!((1, 1, 1, 0), get_counts_by_operation(client).await);
+                cache.db_cache.flush(&client).await?;
+                assert_eq!((1, 1, 1, 0), get_counts_by_operation(&client).await);
                 assert_eq!(
                     Some(1000_000000000000000000),
-                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                    get_token_minted_supply(&"pepe".to_string(), &client).await?
                 );
                 assert_eq!(
                     (1, 1, 1, 0),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
@@ -798,8 +808,12 @@ mod test {
                         PgNumericU128(500_000000000000000000),
                         PgNumericU128(1000_000000000000000000)
                     )),
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
             }
             // Transfer send
@@ -834,18 +848,18 @@ mod test {
                                     .to_string(),
                         },
                         0,
-                        client,
+                        &client,
                     )
                     .await?;
-                cache.db_cache.flush(client).await?;
-                assert_eq!((1, 1, 1, 1), get_counts_by_operation(client).await);
+                cache.db_cache.flush(&client).await?;
+                assert_eq!((1, 1, 1, 1), get_counts_by_operation(&client).await);
                 assert_eq!(
                     Some(1000_000000000000000000),
-                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                    get_token_minted_supply(&"pepe".to_string(), &client).await?
                 );
                 assert_eq!(
                     (1, 1, 1, 1),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
@@ -854,8 +868,12 @@ mod test {
                         PgNumericU128(0),
                         PgNumericU128(500_000000000000000000)
                     )),
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
                 assert_eq!(
                     Some((
@@ -866,7 +884,7 @@ mod test {
                     get_address_token_balance(
                         "bc1pngjqgeamkmmhlr6ft5yllgdmfllvcvnw5s7ew2ler3rl0z47uaesrj6jte",
                         "pepe",
-                        client
+                        &client
                     )
                     .await
                 );
@@ -874,15 +892,15 @@ mod test {
 
             // Rollback Transfer send
             {
-                brc20_pg::rollback_block_operations(800003, client).await?;
-                assert_eq!((1, 1, 1, 0), get_counts_by_operation(client).await);
+                brc20_pg::rollback_block_operations(800003, &client).await?;
+                assert_eq!((1, 1, 1, 0), get_counts_by_operation(&client).await);
                 assert_eq!(
                     Some(1000_000000000000000000),
-                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                    get_token_minted_supply(&"pepe".to_string(), &client).await?
                 );
                 assert_eq!(
                     (1, 1, 1, 0),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
@@ -891,30 +909,34 @@ mod test {
                         PgNumericU128(500_000000000000000000),
                         PgNumericU128(1000_000000000000000000)
                     )),
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
                 assert_eq!(
                     Some((PgNumericU128(0), PgNumericU128(0), PgNumericU128(0))),
                     get_address_token_balance(
                         "bc1pngjqgeamkmmhlr6ft5yllgdmfllvcvnw5s7ew2ler3rl0z47uaesrj6jte",
                         "pepe",
-                        client
+                        &client
                     )
                     .await
                 );
             }
             // Rollback transfer
             {
-                brc20_pg::rollback_block_operations(800002, client).await?;
-                assert_eq!((1, 1, 0, 0), get_counts_by_operation(client).await);
+                brc20_pg::rollback_block_operations(800002, &client).await?;
+                assert_eq!((1, 1, 0, 0), get_counts_by_operation(&client).await);
                 assert_eq!(
                     Some(1000_000000000000000000),
-                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                    get_token_minted_supply(&"pepe".to_string(), &client).await?
                 );
                 assert_eq!(
                     (1, 1, 0, 0),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
@@ -923,52 +945,61 @@ mod test {
                         PgNumericU128(0),
                         PgNumericU128(1000_000000000000000000)
                     )),
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
             }
             // Rollback mint
             {
-                brc20_pg::rollback_block_operations(800001, client).await?;
-                assert_eq!((1, 0, 0, 0), get_counts_by_operation(client).await);
+                brc20_pg::rollback_block_operations(800001, &client).await?;
+                assert_eq!((1, 0, 0, 0), get_counts_by_operation(&client).await);
                 assert_eq!(
                     (1, 0, 0, 0),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
                     Some(0),
-                    get_token_minted_supply(&"pepe".to_string(), client).await?
+                    get_token_minted_supply(&"pepe".to_string(), &client).await?
                 );
                 assert_eq!(
                     Some((PgNumericU128(0), PgNumericU128(0), PgNumericU128(0))),
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
             }
             // Rollback deploy
             {
-                brc20_pg::rollback_block_operations(800000, client).await?;
+                brc20_pg::rollback_block_operations(800000, &client).await?;
                 assert_eq!(
                     None,
-                    brc20_pg::get_token(&"pepe".to_string(), client).await?
+                    brc20_pg::get_token(&"pepe".to_string(), &client).await?
                 );
-                assert_eq!((0, 0, 0, 0), get_counts_by_operation(client).await);
+                assert_eq!((0, 0, 0, 0), get_counts_by_operation(&client).await);
                 assert_eq!(
                     (0, 0, 0, 0),
-                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client)
+                    get_counts_by_address_operation("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client)
                         .await
                 );
                 assert_eq!(
                     None,
-                    get_address_token_balance("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", "pepe", client)
-                        .await
+                    get_address_token_balance(
+                        "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp",
+                        "pepe",
+                        &client
+                    )
+                    .await
                 );
             }
-
-            Ok(())
-        })
-        .await?;
+        }
         pg_test_clear_db(&mut pg_client).await;
         Ok(())
     }

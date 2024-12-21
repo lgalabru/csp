@@ -261,7 +261,7 @@ pub async fn verify_brc20_transfer(
 
 #[cfg(test)]
 mod test {
-    use chainhook_postgres::with_pg_transaction;
+    use chainhook_postgres::{pg_begin, pg_pool_client};
     use chainhook_sdk::types::{
         BitcoinNetwork, BlockIdentifier, OrdinalInscriptionRevealData,
         OrdinalInscriptionTransferData, OrdinalInscriptionTransferDestination,
@@ -402,7 +402,10 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let result = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
             verify_brc20_operation(
                 &op,
                 &args.0,
@@ -413,12 +416,11 @@ mod test {
                 },
                 &BitcoinNetwork::Mainnet,
                 &mut Brc20MemoryCache::new(50),
-                client,
+                &client,
                 &ctx,
             )
             .await
-        })
-        .await;
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }
@@ -491,7 +493,10 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         brc20_pg::migrate(&mut pg_client).await?;
-        let result = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
             let block = BlockIdentifier {
                 index: 835727,
                 hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
@@ -524,12 +529,11 @@ mod test {
                 &block,
                 &BitcoinNetwork::Mainnet,
                 &mut cache,
-                client,
+                &client,
                 &ctx,
             )
             .await
-        })
-        .await;
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }
@@ -576,7 +580,10 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let result = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
             let block = BlockIdentifier {
                 index: 840000,
                 hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
@@ -609,12 +616,11 @@ mod test {
                 &block,
                 &BitcoinNetwork::Mainnet,
                 &mut cache,
-                client,
+                &client,
                 &ctx,
             )
             .await
-        })
-        .await;
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }
@@ -636,7 +642,10 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let result = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
             let block = BlockIdentifier {
                 index: 835727,
                 hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
@@ -675,7 +684,7 @@ mod test {
                     0,
                     &tx,
                     1,
-                    client,
+                    &client,
                 )
                 .await?;
             verify_brc20_operation(
@@ -684,12 +693,11 @@ mod test {
                 &block,
                 &BitcoinNetwork::Mainnet,
                 &mut cache,
-                client,
+                &client,
                 &ctx,
             )
             .await
-        })
-        .await;
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }
@@ -714,7 +722,10 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let result = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
             let block = BlockIdentifier {
                 index: 835727,
                 hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
@@ -753,7 +764,7 @@ mod test {
                     0,
                     &tx,
                     1,
-                    client,
+                    &client,
                 )
                 .await?;
             verify_brc20_operation(
@@ -762,12 +773,11 @@ mod test {
                 &block,
                 &BitcoinNetwork::Mainnet,
                 &mut cache,
-                client,
+                &client,
                 &ctx,
             )
             .await
-        })
-        .await;
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }
@@ -853,36 +863,38 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let result =
-            with_pg_transaction(&pg_test_connection_pool(), |client| async move {
-                let block = BlockIdentifier {
-                    index: 835727,
-                    hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
-                        .to_string(),
-                };
-                let tx = TransactionIdentifier {
-                    hash: "8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d391"
-                        .to_string(),
-                };
-                let mut cache = Brc20MemoryCache::new(10);
-                cache.insert_token_deploy(
-                    &VerifiedBrc20TokenDeployData {
-                        tick: "pepe".to_string(),
-                        display_tick: "pepe".to_string(),
-                        max: 21000000_000000000000000000,
-                        lim: 1000_000000000000000000,
-                        dec: 18,
-                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                        self_mint: false,
-                    },
-                    &Brc20RevealBuilder::new().inscription_number(0).build(),
-                    &block,
-                    0,
-                    &tx,
-                    0,
-                )?;
-                // Mint from 2 addresses
-                cache.insert_token_mint(
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
+            let block = BlockIdentifier {
+                index: 835727,
+                hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                    .to_string(),
+            };
+            let tx = TransactionIdentifier {
+                hash: "8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d391"
+                    .to_string(),
+            };
+            let mut cache = Brc20MemoryCache::new(10);
+            cache.insert_token_deploy(
+                &VerifiedBrc20TokenDeployData {
+                    tick: "pepe".to_string(),
+                    display_tick: "pepe".to_string(),
+                    max: 21000000_000000000000000000,
+                    lim: 1000_000000000000000000,
+                    dec: 18,
+                    address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                    self_mint: false,
+                },
+                &Brc20RevealBuilder::new().inscription_number(0).build(),
+                &block,
+                0,
+                &tx,
+                0,
+            )?;
+            // Mint from 2 addresses
+            cache.insert_token_mint(
                 &VerifiedBrc20BalanceData {
                     tick: "pepe".to_string(),
                     amt: 1000_000000000000000000,
@@ -898,9 +910,9 @@ mod test {
                 1,
                 &tx,
                 1,
-                client
+                &client
             ).await?;
-                cache.insert_token_mint(
+            cache.insert_token_mint(
                 &VerifiedBrc20BalanceData {
                     tick: "pepe".to_string(),
                     amt: 1000_000000000000000000,
@@ -916,20 +928,19 @@ mod test {
                 2,
                 &tx,
                 2,
-                client
+                &client
             ).await?;
-                verify_brc20_operation(
-                    &op,
-                    &reveal,
-                    &block,
-                    &BitcoinNetwork::Mainnet,
-                    &mut cache,
-                    client,
-                    &ctx,
-                )
-                .await
-            })
-            .await;
+            verify_brc20_operation(
+                &op,
+                &reveal,
+                &block,
+                &BitcoinNetwork::Mainnet,
+                &mut cache,
+                &client,
+                &ctx,
+            )
+            .await
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }
@@ -982,79 +993,80 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let result =
-            with_pg_transaction(&pg_test_connection_pool(), |client| async move {
-                let block = BlockIdentifier {
-                    index: 835727,
-                    hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
-                        .to_string(),
-                };
-                let tx = TransactionIdentifier {
-                    hash: "8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d391"
-                        .to_string(),
-                };
-                let mut cache = Brc20MemoryCache::new(10);
-                cache.insert_token_deploy(
-                    &VerifiedBrc20TokenDeployData {
-                        tick: "pepe".to_string(),
-                        display_tick: "pepe".to_string(),
-                        max: 21000000_000000000000000000,
-                        lim: 1000_000000000000000000,
-                        dec: 18,
-                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                        self_mint: false,
-                    },
-                    &Brc20RevealBuilder::new()
-                        .inscription_number(0)
-                        .inscription_id(
-                            "e45957c419f130cd5c88cdac3eb1caf2d118aee20c17b15b74a611be395a065di0",
-                        )
-                        .build(),
-                    &block,
-                    0,
-                    &tx,
-                    0,
-                )?;
-                cache.insert_token_mint(
-                    &VerifiedBrc20BalanceData {
-                        tick: "pepe".to_string(),
-                        amt: 1000_000000000000000000,
-                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                    },
-                    &Brc20RevealBuilder::new()
-                        .inscription_number(1)
-                        .inscription_id(
-                            "269d46f148733ce86153e3ec0e0a3c78780e9b07e90a07e11753f0e934a60724i0",
-                        )
-                        .build(),
-                    &block,
-                    1,
-                    &tx,
-                    1,
-                    client
-                ).await?;
-                cache.insert_token_transfer(
-                    &VerifiedBrc20BalanceData {
-                        tick: "pepe".to_string(),
-                        amt: 500_000000000000000000,
-                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                    },
-                    &Brc20RevealBuilder::new()
-                        .inscription_number(2)
-                        .ordinal_number(5000)
-                        .inscription_id(
-                            "704b85a939c34ec9dbbf79c0ffc69ba09566d732dbf1af2c04de65b0697aa1f8i0",
-                        )
-                        .build(),
-                    &block,
-                    2,
-                    &tx,
-                    2,
-                    client
-                ).await?;
-                verify_brc20_transfer(&transfer, &mut cache, client, &ctx).await
-            })
-            .await;
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
+            let block = BlockIdentifier {
+                index: 835727,
+                hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                    .to_string(),
+            };
+            let tx = TransactionIdentifier {
+                hash: "8c8e37ce3ddd869767f8d839d16acc7ea4ec9dd7e3c73afd42a0abb859d7d391"
+                    .to_string(),
+            };
+            let mut cache = Brc20MemoryCache::new(10);
+            cache.insert_token_deploy(
+                &VerifiedBrc20TokenDeployData {
+                    tick: "pepe".to_string(),
+                    display_tick: "pepe".to_string(),
+                    max: 21000000_000000000000000000,
+                    lim: 1000_000000000000000000,
+                    dec: 18,
+                    address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                    self_mint: false,
+                },
+                &Brc20RevealBuilder::new()
+                    .inscription_number(0)
+                    .inscription_id(
+                        "e45957c419f130cd5c88cdac3eb1caf2d118aee20c17b15b74a611be395a065di0",
+                    )
+                    .build(),
+                &block,
+                0,
+                &tx,
+                0,
+            )?;
+            cache.insert_token_mint(
+                &VerifiedBrc20BalanceData {
+                    tick: "pepe".to_string(),
+                    amt: 1000_000000000000000000,
+                    address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                },
+                &Brc20RevealBuilder::new()
+                    .inscription_number(1)
+                    .inscription_id(
+                        "269d46f148733ce86153e3ec0e0a3c78780e9b07e90a07e11753f0e934a60724i0",
+                    )
+                    .build(),
+                &block,
+                1,
+                &tx,
+                1,
+                &client
+            ).await?;
+            cache.insert_token_transfer(
+                &VerifiedBrc20BalanceData {
+                    tick: "pepe".to_string(),
+                    amt: 500_000000000000000000,
+                    address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                },
+                &Brc20RevealBuilder::new()
+                    .inscription_number(2)
+                    .ordinal_number(5000)
+                    .inscription_id(
+                        "704b85a939c34ec9dbbf79c0ffc69ba09566d732dbf1af2c04de65b0697aa1f8i0",
+                    )
+                    .build(),
+                &block,
+                2,
+                &tx,
+                2,
+                &client
+            ).await?;
+            verify_brc20_transfer(&transfer, &mut cache, &client, &ctx).await
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }
@@ -1071,95 +1083,98 @@ mod test {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let result =
-            with_pg_transaction(&pg_test_connection_pool(), |client| async move {
-                let block = BlockIdentifier {
-                    index: 835727,
-                    hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
-                        .to_string(),
-                };
-                let tx = TransactionIdentifier {
-                    hash: "e45957c419f130cd5c88cdac3eb1caf2d118aee20c17b15b74a611be395a065d"
-                        .to_string(),
-                };
-                let mut cache = Brc20MemoryCache::new(10);
-                cache.insert_token_deploy(
-                    &VerifiedBrc20TokenDeployData {
-                        tick: "pepe".to_string(),
-                        display_tick: "pepe".to_string(),
-                        max: 21000000_000000000000000000,
-                        lim: 1000_000000000000000000,
-                        dec: 18,
-                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                        self_mint: false,
-                    },
-                    &Brc20RevealBuilder::new()
-                        .inscription_number(0)
-                        .inscription_id(
-                            "e45957c419f130cd5c88cdac3eb1caf2d118aee20c17b15b74a611be395a065di0",
-                        )
-                        .build(),
-                    &block,
-                    0,
-                    &tx,
-                    0,
-                )?;
-                cache.insert_token_mint(
-                    &VerifiedBrc20BalanceData {
-                        tick: "pepe".to_string(),
-                        amt: 1000_000000000000000000,
-                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                    },
-                    &Brc20RevealBuilder::new()
-                        .inscription_number(1)
-                        .inscription_id(
-                            "269d46f148733ce86153e3ec0e0a3c78780e9b07e90a07e11753f0e934a60724i0",
-                        )
-                        .build(),
-                    &block,
-                    1,
-                    &tx,
-                    1, client,
-                ).await?;
-                cache.insert_token_transfer(
-                    &VerifiedBrc20BalanceData {
+        let result = {
+            let mut brc20_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut brc20_client).await?;
+
+            let block = BlockIdentifier {
+                index: 835727,
+                hash: "00000000000000000002d8ba402150b259ddb2b30a1d32ab4a881d4653bceb5b"
+                    .to_string(),
+            };
+            let tx = TransactionIdentifier {
+                hash: "e45957c419f130cd5c88cdac3eb1caf2d118aee20c17b15b74a611be395a065d"
+                    .to_string(),
+            };
+            let mut cache = Brc20MemoryCache::new(10);
+            cache.insert_token_deploy(
+                &VerifiedBrc20TokenDeployData {
+                    tick: "pepe".to_string(),
+                    display_tick: "pepe".to_string(),
+                    max: 21000000_000000000000000000,
+                    lim: 1000_000000000000000000,
+                    dec: 18,
+                    address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                    self_mint: false,
+                },
+                &Brc20RevealBuilder::new()
+                    .inscription_number(0)
+                    .inscription_id(
+                        "e45957c419f130cd5c88cdac3eb1caf2d118aee20c17b15b74a611be395a065di0",
+                    )
+                    .build(),
+                &block,
+                0,
+                &tx,
+                0,
+            )?;
+            cache.insert_token_mint(
+                &VerifiedBrc20BalanceData {
+                    tick: "pepe".to_string(),
+                    amt: 1000_000000000000000000,
+                    address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                },
+                &Brc20RevealBuilder::new()
+                    .inscription_number(1)
+                    .inscription_id(
+                        "269d46f148733ce86153e3ec0e0a3c78780e9b07e90a07e11753f0e934a60724i0",
+                    )
+                    .build(),
+                &block,
+                1,
+                &tx,
+                1,
+                &client,
+            ).await?;
+            cache.insert_token_transfer(
+                &VerifiedBrc20BalanceData {
+                    tick: "pepe".to_string(),
+                    amt: 500_000000000000000000,
+                    address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                },
+                &Brc20RevealBuilder::new()
+                    .inscription_number(2)
+                    .ordinal_number(5000)
+                    .inscription_id(
+                        "704b85a939c34ec9dbbf79c0ffc69ba09566d732dbf1af2c04de65b0697aa1f8i0",
+                    )
+                    .build(),
+                &block,
+                2,
+                &tx,
+                2,
+                &client,
+            ).await?;
+            cache
+                .insert_token_transfer_send(
+                    &VerifiedBrc20TransferData {
                         tick: "pepe".to_string(),
                         amt: 500_000000000000000000,
-                        address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                        sender_address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
+                        receiver_address:
+                            "bc1pls75sfwullhygkmqap344f5cqf97qz95lvle6fvddm0tpz2l5ffslgq3m0"
+                                .to_string(),
                     },
-                    &Brc20RevealBuilder::new()
-                        .inscription_number(2)
-                        .ordinal_number(5000)
-                        .inscription_id(
-                            "704b85a939c34ec9dbbf79c0ffc69ba09566d732dbf1af2c04de65b0697aa1f8i0",
-                        )
-                        .build(),
+                    &Brc20TransferBuilder::new().ordinal_number(5000).build(),
                     &block,
-                    2,
+                    3,
                     &tx,
-                    2, client,
-                ).await?;
-                cache
-                    .insert_token_transfer_send(
-                        &VerifiedBrc20TransferData {
-                            tick: "pepe".to_string(),
-                            amt: 500_000000000000000000,
-                            sender_address: "324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                            receiver_address:
-                                "bc1pls75sfwullhygkmqap344f5cqf97qz95lvle6fvddm0tpz2l5ffslgq3m0"
-                                    .to_string(),
-                        },
-                        &Brc20TransferBuilder::new().ordinal_number(5000).build(),
-                        &block,
-                        3,
-                        &tx,
-                        3,
-                        client,
-                    )
-                    .await?;
-                verify_brc20_transfer(&transfer, &mut cache, client, &ctx).await
-            })
-            .await;
+                    3,
+                    &client,
+                )
+                .await?;
+            verify_brc20_transfer(&transfer, &mut cache, &client, &ctx).await
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }

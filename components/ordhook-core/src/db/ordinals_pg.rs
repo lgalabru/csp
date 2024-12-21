@@ -961,7 +961,7 @@ pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> 
             INSERT INTO counts_by_address (address, count)
             (SELECT address, count FROM new_owners)
             ON CONFLICT (address) DO UPDATE SET count = counts_by_address.count + EXCLUDED.count",
-            &[&moved_sats]
+            &[&moved_sats],
         )
         .await
         .map_err(|e| format!("rollback_block (4): {e}"))?;
@@ -973,8 +973,9 @@ pub async fn rollback_block<T: GenericClient>(block_height: u64, client: &T) -> 
 mod test {
     use chainhook_postgres::{
         deadpool_postgres::GenericClient,
+        pg_begin, pg_pool_client,
         types::{PgBigIntU32, PgNumericU64},
-        with_pg_transaction, FromPgRow,
+        FromPgRow,
     };
     use chainhook_sdk::types::{
         OrdinalInscriptionNumber, OrdinalInscriptionRevealData, OrdinalInscriptionTransferData,
@@ -1136,7 +1137,9 @@ mod test {
     async fn test_apply_and_rollback() -> Result<(), String> {
         let mut pg_client = pg_test_connection().await;
         ordinals_pg::migrate(&mut pg_client).await?;
-        with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        {
+            let mut ord_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut ord_client).await?;
             // Reveal
             {
                 let block = TestBlockBuilder::new()
@@ -1173,20 +1176,30 @@ mod test {
                             .build()
                     )
                     .build();
-                insert_block(&block, client).await?;
-                assert_eq!(1, get_inscriptions_at_block(client, 800000).await?.len());
-                assert!(get_inscription("b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0", client).await.is_some());
-                let locations = get_locations(7000, client).await;
+                insert_block(&block, &client).await?;
+                assert_eq!(1, get_inscriptions_at_block(&client, 800000).await?.len());
+                assert!(get_inscription(
+                    "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0",
+                    &client
+                )
+                .await
+                .is_some());
+                let locations = get_locations(7000, &client).await;
                 assert_eq!(1, locations.len());
                 assert_eq!(
                     Some(&DbLocation {
                         ordinal_number: PgNumericU64(7000),
                         block_height: PgNumericU64(800000),
-                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
+                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735"
+                            .to_string(),
                         tx_index: PgBigIntU32(0),
-                        block_hash: "000000000000000000024d4c784521e54b6f4a5945376ae6e248cee1ed2c0627".to_string(),
+                        block_hash:
+                            "000000000000000000024d4c784521e54b6f4a5945376ae6e248cee1ed2c0627"
+                                .to_string(),
                         address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
-                        output: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string(),
+                        output:
+                            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0"
+                                .to_string(),
                         offset: Some(PgNumericU64(0)),
                         prev_output: None,
                         prev_offset: None,
@@ -1200,13 +1213,16 @@ mod test {
                     Some(DbCurrentLocation {
                         ordinal_number: PgNumericU64(7000),
                         block_height: PgNumericU64(800000),
-                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
+                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735"
+                            .to_string(),
                         tx_index: PgBigIntU32(0),
                         address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
-                        output: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string(),
+                        output:
+                            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0"
+                                .to_string(),
                         offset: Some(PgNumericU64(0))
                     }),
-                    get_current_location(7000, client).await
+                    get_current_location(7000, &client).await
                 );
                 assert_eq!(
                     Some(DbSatoshi {
@@ -1214,16 +1230,22 @@ mod test {
                         rarity: "common".to_string(),
                         coinbase_height: PgNumericU64(0)
                     }),
-                    get_satoshi(7000, client).await
+                    get_satoshi(7000, &client).await
                 );
-                assert_eq!(1, get_mime_type_count("text/plain", client).await);
-                assert_eq!(1, get_sat_rarity_count("common", client).await);
-                assert_eq!(1, get_recursive_count(false, client).await);
-                assert_eq!(1, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(1, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(1, get_type_count("blessed", client).await);
-                assert_eq!(1, get_block_reveal_count(800000, client).await);
-                assert_eq!(Some(800000), get_chain_tip_block_height(client).await?);
+                assert_eq!(1, get_mime_type_count("text/plain", &client).await);
+                assert_eq!(1, get_sat_rarity_count("common", &client).await);
+                assert_eq!(1, get_recursive_count(false, &client).await);
+                assert_eq!(
+                    1,
+                    get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(
+                    1,
+                    get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(1, get_type_count("blessed", &client).await);
+                assert_eq!(1, get_block_reveal_count(800000, &client).await);
+                assert_eq!(Some(800000), get_chain_tip_block_height(&client).await?);
             }
             // Transfer
             {
@@ -1246,21 +1268,29 @@ mod test {
                             .build()
                     )
                     .build();
-                insert_block(&block, client).await?;
-                assert_eq!(0, get_inscriptions_at_block(client, 800001).await?.len());
-                let locations = get_locations(7000, client).await;
+                insert_block(&block, &client).await?;
+                assert_eq!(0, get_inscriptions_at_block(&client, 800001).await?.len());
+                let locations = get_locations(7000, &client).await;
                 assert_eq!(2, locations.len());
                 assert_eq!(
                     Some(&DbLocation {
                         ordinal_number: PgNumericU64(7000),
                         block_height: PgNumericU64(800001),
-                        tx_id: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f".to_string(),
+                        tx_id: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f"
+                            .to_string(),
                         tx_index: PgBigIntU32(0),
-                        block_hash: "00000000000000000001b322ec2ea8b5b9b0ac413385069ad6b0c84e0331bf23".to_string(),
+                        block_hash:
+                            "00000000000000000001b322ec2ea8b5b9b0ac413385069ad6b0c84e0331bf23"
+                                .to_string(),
                         address: Some("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay".to_string()),
-                        output: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f:0".to_string(),
+                        output:
+                            "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f:0"
+                                .to_string(),
                         offset: Some(PgNumericU64(0)),
-                        prev_output: Some("b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string()),
+                        prev_output: Some(
+                            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0"
+                                .to_string()
+                        ),
                         prev_offset: Some(PgNumericU64(0)),
                         value: Some(PgNumericU64(8000)),
                         transfer_type: "transferred".to_string(),
@@ -1272,70 +1302,105 @@ mod test {
                     Some(DbCurrentLocation {
                         ordinal_number: PgNumericU64(7000),
                         block_height: PgNumericU64(800001),
-                        tx_id: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f".to_string(),
+                        tx_id: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f"
+                            .to_string(),
                         tx_index: PgBigIntU32(0),
                         address: Some("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay".to_string()),
-                        output: "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f:0".to_string(),
+                        output:
+                            "4862db07b588ebfd8627371045d6d17a99a66a01759782d7dd3009f68adb860f:0"
+                                .to_string(),
                         offset: Some(PgNumericU64(0))
                     }),
-                    get_current_location(7000, client).await
+                    get_current_location(7000, &client).await
                 );
-                assert_eq!(1, get_mime_type_count("text/plain", client).await);
-                assert_eq!(1, get_sat_rarity_count("common", client).await);
-                assert_eq!(1, get_recursive_count(false, client).await);
-                assert_eq!(0, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(1, get_address_count("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay", client).await);
-                assert_eq!(1, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(1, get_type_count("blessed", client).await);
-                assert_eq!(Some(800001), get_chain_tip_block_height(client).await?);
+                assert_eq!(1, get_mime_type_count("text/plain", &client).await);
+                assert_eq!(1, get_sat_rarity_count("common", &client).await);
+                assert_eq!(1, get_recursive_count(false, &client).await);
+                assert_eq!(
+                    0,
+                    get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(
+                    1,
+                    get_address_count("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay", &client).await
+                );
+                assert_eq!(
+                    1,
+                    get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(1, get_type_count("blessed", &client).await);
+                assert_eq!(Some(800001), get_chain_tip_block_height(&client).await?);
             }
 
             // Rollback transfer
             {
-                rollback_block(800001, client).await?;
-                assert_eq!(1, get_locations(7000, client).await.len());
+                rollback_block(800001, &client).await?;
+                assert_eq!(1, get_locations(7000, &client).await.len());
                 assert_eq!(
                     Some(DbCurrentLocation {
                         ordinal_number: PgNumericU64(7000),
                         block_height: PgNumericU64(800000),
-                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735".to_string(),
+                        tx_id: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735"
+                            .to_string(),
                         tx_index: PgBigIntU32(0),
                         address: Some("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string()),
-                        output: "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0".to_string(),
+                        output:
+                            "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735:0"
+                                .to_string(),
                         offset: Some(PgNumericU64(0))
                     }),
-                    get_current_location(7000, client).await
+                    get_current_location(7000, &client).await
                 );
-                assert_eq!(1, get_mime_type_count("text/plain", client).await);
-                assert_eq!(1, get_sat_rarity_count("common", client).await);
-                assert_eq!(1, get_recursive_count(false, client).await);
-                assert_eq!(0, get_address_count("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay", client).await);
-                assert_eq!(1, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(1, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(1, get_type_count("blessed", client).await);
-                assert_eq!(1, get_block_reveal_count(800000, client).await);
-                assert_eq!(Some(800000), get_chain_tip_block_height(client).await?);
+                assert_eq!(1, get_mime_type_count("text/plain", &client).await);
+                assert_eq!(1, get_sat_rarity_count("common", &client).await);
+                assert_eq!(1, get_recursive_count(false, &client).await);
+                assert_eq!(
+                    0,
+                    get_address_count("3DnzPvLPH1jA9EqQzq3Fgo9BMDya4eG1ay", &client).await
+                );
+                assert_eq!(
+                    1,
+                    get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(
+                    1,
+                    get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(1, get_type_count("blessed", &client).await);
+                assert_eq!(1, get_block_reveal_count(800000, &client).await);
+                assert_eq!(Some(800000), get_chain_tip_block_height(&client).await?);
             }
             // Rollback reveal
             {
-                rollback_block(800000, client).await?;
-                assert_eq!(0, get_inscriptions_at_block(client, 800000).await?.len());
-                assert_eq!(None, get_inscription("b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0", client).await);
-                assert_eq!(0, get_locations(7000, client).await.len());
-                assert_eq!(None, get_current_location(7000, client).await);
-                assert_eq!(None, get_satoshi(7000, client).await);
-                assert_eq!(0, get_mime_type_count("text/plain", client).await);
-                assert_eq!(0, get_recursive_count(false, client).await);
-                assert_eq!(0, get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(0, get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", client).await);
-                assert_eq!(0, get_type_count("blessed", client).await);
-                assert_eq!(0, get_block_reveal_count(800000, client).await);
-                assert_eq!(0, get_sat_rarity_count("common", client).await);
-                assert_eq!(Some(799999), get_chain_tip_block_height(client).await?);
+                rollback_block(800000, &client).await?;
+                assert_eq!(0, get_inscriptions_at_block(&client, 800000).await?.len());
+                assert_eq!(
+                    None,
+                    get_inscription(
+                        "b61b0172d95e266c18aea0c624db987e971a5d6d4ebc2aaed85da4642d635735i0",
+                        &client
+                    )
+                    .await
+                );
+                assert_eq!(0, get_locations(7000, &client).await.len());
+                assert_eq!(None, get_current_location(7000, &client).await);
+                assert_eq!(None, get_satoshi(7000, &client).await);
+                assert_eq!(0, get_mime_type_count("text/plain", &client).await);
+                assert_eq!(0, get_recursive_count(false, &client).await);
+                assert_eq!(
+                    0,
+                    get_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(
+                    0,
+                    get_genesis_address_count("324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp", &client).await
+                );
+                assert_eq!(0, get_type_count("blessed", &client).await);
+                assert_eq!(0, get_block_reveal_count(800000, &client).await);
+                assert_eq!(0, get_sat_rarity_count("common", &client).await);
+                assert_eq!(Some(799999), get_chain_tip_block_height(&client).await?);
             }
-            Ok(())
-        })
-        .await?;
+        }
         pg_test_clear_db(&mut pg_client).await;
         Ok(())
     }

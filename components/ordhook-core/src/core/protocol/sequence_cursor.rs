@@ -142,7 +142,7 @@ impl SequenceCursor {
 
 #[cfg(test)]
 mod test {
-    use chainhook_postgres::with_pg_transaction;
+    use chainhook_postgres::{pg_begin, pg_pool_client};
     use chainhook_sdk::bitcoin::Network;
 
     use test_case::test_case;
@@ -165,12 +165,15 @@ mod test {
     async fn picks_next_number((block_height, cursed): (u64, bool)) -> Result<(i64, i64), String> {
         let mut pg_client = pg_test_connection().await;
         ordinals_pg::migrate(&mut pg_client).await?;
-        let result = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        let result = {
+            let mut ord_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut ord_client).await?;
+
             let mut block = TestBlockBuilder::new()
                 .transactions(vec![TestTransactionBuilder::new_with_operation().build()])
                 .build();
             block.block_identifier.index = block_height;
-            insert_block(&block, client).await?;
+            insert_block(&block, &client).await?;
 
             // Pick next twice so we can test all cases.
             let mut cursor = SequenceCursor::new();
@@ -179,25 +182,24 @@ mod test {
                     cursed,
                     block.block_identifier.index + 1,
                     &Network::Bitcoin,
-                    client,
+                    &client,
                 )
                 .await?;
-            cursor.increment(cursed, client).await?;
+            cursor.increment(cursed, &client).await?;
 
             block.block_identifier.index = block.block_identifier.index + 1;
-            insert_block(&block, client).await?;
+            insert_block(&block, &client).await?;
             let next = cursor
                 .pick_next(
                     cursed,
                     block.block_identifier.index + 1,
                     &Network::Bitcoin,
-                    client,
+                    &client,
                 )
                 .await?;
 
-            Ok((next.classic, next.jubilee))
-        })
-        .await?;
+            (next.classic, next.jubilee)
+        };
         pg_test_clear_db(&mut pg_client).await;
         Ok(result)
     }

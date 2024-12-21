@@ -473,7 +473,7 @@ impl Brc20MemoryCache {
 
 #[cfg(test)]
 mod test {
-    use chainhook_postgres::with_pg_transaction;
+    use chainhook_postgres::{pg_begin, pg_pool_client};
     use chainhook_sdk::types::{BitcoinNetwork, BlockIdentifier, TransactionIdentifier};
     use test_case::test_case;
 
@@ -493,11 +493,14 @@ mod test {
     use super::Brc20MemoryCache;
 
     #[tokio::test]
-    async fn test_brc20_memory_cache_transfer_miss() {
+    async fn test_brc20_memory_cache_transfer_miss() -> Result<(), String> {
         let ctx = get_test_ctx();
         let mut pg_client = pg_test_connection().await;
         let _ = brc20_pg::migrate(&mut pg_client).await;
-        let _ = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        {
+            let mut ord_client = pg_pool_client(&pg_test_connection_pool()).await.unwrap();
+            let client = pg_begin(&mut ord_client).await.unwrap();
+
             // LRU size as 1 so we can test a miss.
             let mut cache = Brc20MemoryCache::new(1);
             cache.insert_token_deploy(
@@ -546,7 +549,7 @@ mod test {
                             .to_string(),
                     },
                     1,
-                    client,
+                    &client,
                 )
                 .await?;
             cache
@@ -564,7 +567,7 @@ mod test {
                             .to_string(),
                     },
                     2,
-                    client,
+                    &client,
                 )
                 .await?;
             // These mint+transfer from a 2nd address will delete the first address' entries from cache.
@@ -586,7 +589,7 @@ mod test {
                             .to_string(),
                     },
                     3,
-                    client,
+                    &client,
                 )
                 .await?;
             cache
@@ -607,7 +610,7 @@ mod test {
                             .to_string(),
                     },
                     4,
-                    client,
+                    &client,
                 )
                 .await?;
             // Validate another transfer from the first address. Should pass because we still have 900 avail balance.
@@ -623,7 +626,7 @@ mod test {
                 &block,
                 &BitcoinNetwork::Mainnet,
                 &mut cache,
-                client,
+                &client,
                 &ctx,
             )
             .await;
@@ -637,10 +640,9 @@ mod test {
                         }
                     )))
             );
-            Ok(())
-        })
-        .await;
+        }
         pg_test_clear_db(&mut pg_client).await;
+        Ok(())
     }
 
     #[test_case(500_000000000000000000 => Ok(Some(500_000000000000000000)); "with transfer amt")]
@@ -651,7 +653,10 @@ mod test {
     ) -> Result<Option<u128>, String> {
         let mut pg_client = pg_test_connection().await;
         brc20_pg::migrate(&mut pg_client).await?;
-        let result = with_pg_transaction(&pg_test_connection_pool(), |client| async move {
+        let result = {
+            let mut ord_client = pg_pool_client(&pg_test_connection_pool()).await?;
+            let client = pg_begin(&mut ord_client).await?;
+
             let mut cache = Brc20MemoryCache::new(10);
             cache.insert_token_deploy(
                 &VerifiedBrc20TokenDeployData {
@@ -695,7 +700,7 @@ mod test {
                             .to_string(),
                     },
                     1,
-                    client,
+                    &client,
                 )
                 .await?;
             assert!(
@@ -703,7 +708,7 @@ mod test {
                     .get_token_address_avail_balance(
                         &"pepe".to_string(),
                         &"324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                        client
+                        &client
                     )
                     .await?
                     == Some(1000_000000000000000000)
@@ -727,18 +732,17 @@ mod test {
                             .to_string(),
                     },
                     2,
-                    client,
+                    &client,
                 )
                 .await?;
             Ok(cache
                 .get_token_address_avail_balance(
                     &"pepe".to_string(),
                     &"324A7GHA2azecbVBAFy4pzEhcPT1GjbUAp".to_string(),
-                    client,
+                    &client,
                 )
                 .await?)
-        })
-        .await;
+        };
         pg_test_clear_db(&mut pg_client).await;
         result
     }

@@ -16,11 +16,12 @@ pub struct PgConnectionConfig {
     pub user: String,
     pub password: Option<String>,
     pub search_path: Option<String>,
+    // pub pool_max_size: Option<usize>,
 }
 
 /// Creates a Postgres connection pool based on a single database config. You can then use this pool to create ad-hoc clients and
 /// transactions for interacting with the database.
-pub fn new_pg_connection_pool(config: &PgConnectionConfig) -> Result<Pool, String> {
+pub fn pg_pool(config: &PgConnectionConfig) -> Result<Pool, String> {
     let mut pg_config = Config::new();
     pg_config
         .dbname(&config.dbname)
@@ -62,7 +63,7 @@ pub async fn pg_begin(client: &mut Object) -> Result<Transaction<'_>, String> {
         .map_err(|e| format!("unable to begin pg transaction: {e}"))
 }
 
-/// Connects to postgres and returns an open client.
+/// Connects to postgres directly (without a Pool) and returns an open client.
 pub async fn pg_connect(config: &PgConnectionConfig) -> Result<Client, String> {
     let mut pg_config = Config::new();
     pg_config
@@ -148,11 +149,11 @@ pub async fn pg_test_roll_back_migrations(pg_client: &mut tokio_postgres::Client
 
 #[cfg(test)]
 mod test {
-    use crate::{new_pg_connection_pool, pg_begin, pg_pool_client};
+    use crate::{pg_pool, pg_begin, pg_pool_client};
 
     #[tokio::test]
     async fn test_pg_connection_and_transaction() -> Result<(), String> {
-        let pool = new_pg_connection_pool(&crate::PgConnectionConfig {
+        let pool = pg_pool(&crate::PgConnectionConfig {
             dbname: "postgres".to_string(),
             host: "localhost".to_string(),
             port: 5432,

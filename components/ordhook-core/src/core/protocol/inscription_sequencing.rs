@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use chainhook_postgres::{deadpool_postgres::Transaction, with_pg_transaction};
+use chainhook_postgres::deadpool_postgres::Transaction;
 use chainhook_sdk::{
     bitcoincore_rpc_json::bitcoin::Network,
     types::{
@@ -20,10 +20,9 @@ use fxhash::FxHasher;
 
 use crate::{
     config::Config,
-    core::{meta_protocols::brc20::brc20_pg, resolve_absolute_pointer},
+    core::resolve_absolute_pointer,
     db::{self, cursor::TransactionBytesCursor, ordinals_pg},
     ord::height::Height,
-    service::PgConnectionPools,
     try_debug, try_error, try_info,
     utils::format_inscription_id,
 };
@@ -32,9 +31,7 @@ use std::sync::mpsc::channel;
 
 use super::{
     satoshi_numbering::{compute_satoshi_number, TraversalResult},
-    satoshi_tracking::{
-        augment_transaction_with_ordinal_transfers, compute_satpoint_post_transfer,
-    },
+    satoshi_tracking::compute_satpoint_post_transfer,
     sequence_cursor::SequenceCursor,
 };
 
@@ -614,228 +611,3 @@ async fn augment_transaction_with_ordinals_inscriptions_data(
 
     Ok(any_event)
 }
-
-/// Best effort to re-augment a `BitcoinTransactionData` with data coming from `inscriptions` and `locations` tables.
-/// Some informations are being lost (curse_type).
-fn consolidate_transaction_with_pre_computed_inscription_data(
-    tx: &mut BitcoinTransactionData,
-    tx_index: usize,
-    coinbase_tx: &BitcoinTransactionData,
-    coinbase_subsidy: u64,
-    cumulated_fees: &mut u64,
-    network: &Network,
-    inscriptions_data: &mut BTreeMap<String, TraversalResult>,
-    ctx: &Context,
-) {
-    let mut subindex = 0;
-    let mut mutated_operations = vec![];
-    mutated_operations.append(&mut tx.metadata.ordinal_operations);
-
-    let inputs = tx
-        .metadata
-        .inputs
-        .iter()
-        .map(|i| i.previous_output.value)
-        .collect::<Vec<u64>>();
-
-    for operation in mutated_operations.iter_mut() {
-        let inscription = match operation {
-            OrdinalOperation::InscriptionRevealed(ref mut inscription) => inscription,
-            OrdinalOperation::InscriptionTransferred(_) => continue,
-        };
-
-        let inscription_id = format_inscription_id(&tx.transaction_identifier, subindex);
-        let Some(traversal) = inscriptions_data.get(&inscription_id) else {
-            // Should we remove the operation instead
-            continue;
-        };
-        subindex += 1;
-
-        inscription.inscription_id = inscription_id.clone();
-        inscription.ordinal_offset = traversal.get_ordinal_coinbase_offset();
-        inscription.ordinal_block_height = traversal.get_ordinal_coinbase_height();
-        inscription.ordinal_number = traversal.ordinal_number;
-        inscription.inscription_number = traversal.inscription_number.clone();
-        inscription.transfers_pre_inscription = traversal.transfers;
-        inscription.inscription_fee = tx.metadata.fee;
-        inscription.tx_index = tx_index;
-
-        let (input_index, relative_offset) = match inscription.inscription_pointer {
-            Some(pointer) => resolve_absolute_pointer(&inputs, pointer),
-            None => (traversal.inscription_input_index, 0),
-        };
-        // Compute satpoint_post_inscription
-        let (destination, satpoint_post_transfer, output_value) = compute_satpoint_post_transfer(
-            tx,
-            input_index,
-            relative_offset,
-            network,
-            coinbase_tx,
-            coinbase_subsidy,
-            cumulated_fees,
-            ctx,
-        );
-
-        inscription.satpoint_post_inscription = satpoint_post_transfer;
-
-        if inscription.inscription_number.classic < 0 {
-            inscription.curse_type = Some(OrdinalInscriptionCurseType::Generic);
-        }
-
-        match destination {
-            OrdinalInscriptionTransferDestination::SpentInFees => continue,
-            OrdinalInscriptionTransferDestination::Burnt(_) => continue,
-            OrdinalInscriptionTransferDestination::Transferred(address) => {
-                inscription.inscription_output_value = output_value.unwrap_or(0);
-                inscription.inscriber_address = Some(address);
-            }
-        }
-    }
-    tx.metadata
-        .ordinal_operations
-        .append(&mut mutated_operations);
-}
-
-/// Best effort to re-augment a `BitcoinBlockData` with data coming from `inscriptions` and `locations` tables.
-/// Some informations are being lost (curse_type).
-pub async fn augment_block_with_pre_computed_ordinals_data(
-    block: &mut BitcoinBlockData,
-    config: &Config,
-    pg_pools: &PgConnectionPools,
-    ctx: &Context,
-) -> Result<(), String> {
-    with_pg_transaction(&pg_pools.ordinals, |client| async move {
-        let network = get_bitcoin_network(&block.metadata.network);
-        let coinbase_subsidy = Height(block.block_identifier.index).subsidy();
-        let coinbase_tx = &block.transactions[0].clone();
-        let mut cumulated_fees = 0;
-
-        // TODO(rafaelcr): Now that we use postgres we should be able to pull all the previous data instead of `TraversalResult`
-        let mut inscriptions_data =
-            ordinals_pg::get_inscriptions_at_block(client, block.block_identifier.index).await?;
-        for (tx_index, tx) in block.transactions.iter_mut().enumerate() {
-            consolidate_transaction_with_pre_computed_inscription_data(
-                tx,
-                tx_index,
-                &coinbase_tx,
-                coinbase_subsidy,
-                &mut cumulated_fees,
-                &network,
-                &mut inscriptions_data,
-                ctx,
-            );
-            let _ = augment_transaction_with_ordinal_transfers(
-                tx,
-                tx_index,
-                &block.block_identifier,
-                &network,
-                &coinbase_tx,
-                coinbase_subsidy,
-                &mut cumulated_fees,
-                client,
-                ctx,
-            )
-            .await?;
-        }
-
-        // BRC-20
-        if let (true, Some(brc20_pool)) = (config.meta_protocols.brc20, &pg_pools.brc20) {
-            with_pg_transaction(brc20_pool, |bclient| async move {
-                Ok(brc20_pg::augment_block_with_operations(block, bclient).await?)
-            })
-            .await?;
-        }
-
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-// #[cfg(test)]
-// mod test {
-//     #[test]
-//     fn consolidates_block_with_pre_computed_data() {
-//         let ctx = Context::empty();
-//         let config = Config::test_default();
-//         drop_all_dbs(&config);
-//         let mut sqlite_dbs = initialize_sqlite_dbs(&config, &ctx);
-
-//         // Prepare DB data. Set blank values because we will fill these out after augmenting.
-//         let reveal = OrdinalInscriptionRevealData {
-//             content_bytes: "0x7b200a20202270223a20226272632d3230222c0a2020226f70223a20226465706c6f79222c0a2020227469636b223a20226f726469222c0a2020226d6178223a20223231303030303030222c0a2020226c696d223a202231303030220a7d".to_string(),
-//             content_type: "text/plain;charset=utf-8".to_string(),
-//             content_length: 94,
-//             inscription_number: OrdinalInscriptionNumber { classic: 0, jubilee: 0 },
-//             inscription_fee: 0,
-//             inscription_output_value: 9000,
-//             inscription_id: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0".to_string(),
-//             inscription_input_index: 0,
-//             inscription_pointer: Some(0),
-//             inscriber_address: Some("bc1qte0s6pz7gsdlqq2cf6hv5mxcfksykyyyjkdfd5".to_string()),
-//             delegate: None,
-//             metaprotocol: None,
-//             metadata: None,
-//             parent: None,
-//             ordinal_number: 1971874687500000,
-//             ordinal_block_height: 849999,
-//             ordinal_offset: 0,
-//             tx_index: 0,
-//             transfers_pre_inscription: 0,
-//             satpoint_post_inscription: "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9:0:0".to_string(),
-//             curse_type: None,
-//         };
-//         insert_entry_in_inscriptions(
-//             &reveal,
-//             &BlockIdentifier {
-//                 index: 850000,
-//                 hash: "0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e"
-//                     .to_string(),
-//             },
-//             &sqlite_dbs.ordinals,
-//             &ctx,
-//         );
-
-//         let mut block = TestBlockBuilder::new()
-//             .height(850000)
-//             .hash("0x000000000000000000029854dcc8becfd64a352e1d2b1f1d3bb6f101a947af0e".to_string())
-//             .add_transaction(TestTransactionBuilder::new().build())
-//             .add_transaction(
-//                 TestTransactionBuilder::new()
-//                     .hash(
-//                         "0xc62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9"
-//                             .to_string(),
-//                     )
-//                     .ordinal_operations(vec![OrdinalOperation::InscriptionRevealed(reveal)])
-//                     .add_input(TestTxInBuilder::new().build())
-//                     .add_output(TestTxOutBuilder::new().value(9000).build())
-//                     .build(),
-//             )
-//             .build();
-
-//         let inscriptions_db_tx = &sqlite_dbs.ordinals.transaction().unwrap();
-//         augment_block_with_pre_computed_ordinals_data(
-//             &mut block,
-//             &inscriptions_db_tx,
-//             true,
-//             None,
-//             &ctx,
-//         );
-
-//         let OrdinalOperation::InscriptionRevealed(reveal) =
-//             &block.transactions[1].metadata.ordinal_operations[0]
-//         else {
-//             unreachable!();
-//         };
-//         assert_eq!(
-//             reveal.inscription_id,
-//             "c62d436323e14cdcb91dd21cb7814fd1ac5b9ecb6e3cc6953b54c02a343f7ec9i0"
-//         );
-//         assert_eq!(reveal.ordinal_offset, 0);
-//         assert_eq!(reveal.ordinal_block_height, 849999);
-//         assert_eq!(reveal.ordinal_number, 1971874687500000);
-//         assert_eq!(reveal.transfers_pre_inscription, 0);
-//         assert_eq!(reveal.inscription_fee, 0);
-//         assert_eq!(reveal.tx_index, 1);
-//     }
-// }

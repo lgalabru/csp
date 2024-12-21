@@ -4,7 +4,7 @@ pub mod protocol;
 #[cfg(test)]
 pub mod test_builders;
 
-use chainhook_postgres::with_pg_client;
+use chainhook_postgres::pg_pool_client;
 use dashmap::DashMap;
 use fxhash::{FxBuildHasher, FxHasher};
 use std::hash::BuildHasherDefault;
@@ -124,10 +124,8 @@ pub async fn should_sync_rocks_db(
 ) -> Result<Option<(u64, u64)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let last_compressed_block = find_last_block_inserted(&blocks_db) as u64;
-    let last_indexed_block = match with_pg_client(&pg_pools.ordinals, |client| async move {
-        Ok(ordinals_pg::get_chain_tip_block_height(&client).await?)
-    })
-    .await?
+    let ord_client = pg_pool_client(&pg_pools.ordinals).await?;
+    let last_indexed_block = match ordinals_pg::get_chain_tip_block_height(&ord_client).await?
     {
         Some(last_indexed_block) => last_indexed_block,
         None => 0,
@@ -149,10 +147,8 @@ pub async fn should_sync_ordinals_db(
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let mut start_block = find_last_block_inserted(&blocks_db) as u64;
 
-    match with_pg_client(&pg_pools.ordinals, |client| async move {
-        Ok(ordinals_pg::get_chain_tip_block_height(&client).await?)
-    })
-    .await?
+    let ord_client = pg_pool_client(&pg_pools.ordinals).await?;
+    match ordinals_pg::get_chain_tip_block_height(&ord_client).await?
     {
         Some(height) => {
             if find_pinned_block_bytes_at_block_height(height as u32, 3, &blocks_db, &ctx).is_none()
