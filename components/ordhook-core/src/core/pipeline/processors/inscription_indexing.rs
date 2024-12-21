@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use chainhook_postgres::with_pg_transaction;
+use chainhook_postgres::{pg_begin, pg_pool_client};
 use chainhook_sdk::{
     types::{BitcoinBlockData, TransactionIdentifier},
     utils::Context,
@@ -34,11 +34,15 @@ use crate::{
             satoshi_tracking::augment_block_with_transfers,
             sequence_cursor::SequenceCursor,
         },
-    }, db::{
+    },
+    db::{
         blocks::{self, open_blocks_db_with_retry},
         cursor::TransactionBytesCursor,
         ordinals_pg,
-    }, service::PgConnectionPools, try_crit, try_debug, try_info, utils::monitoring::PrometheusMonitoring
+    },
+    service::PgConnectionPools,
+    try_crit, try_debug, try_info,
+    utils::monitoring::PrometheusMonitoring,
 };
 
 use crate::{
@@ -215,7 +219,10 @@ pub async fn process_block(
     let block_height = block.block_identifier.index;
     try_info!(ctx, "Indexing block #{block_height}");
 
-    with_pg_transaction(&pg_pools.ordinals, |tx| async move {
+    {
+        let mut ord_client = pg_pool_client(&pg_pools.ordinals).await?;
+        let ord_tx = pg_begin(&mut ord_client).await?;
+
         // Parsed BRC20 ops will be deposited here for this block.
         let mut brc20_operation_map = HashMap::new();
         parse_inscriptions_in_standardized_block(block, &mut brc20_operation_map, config, &ctx);
@@ -234,38 +241,45 @@ pub async fn process_block(
             Context::empty()
         };
         if has_inscription_reveals {
-            augment_block_with_inscriptions(block, sequence_cursor, cache_l1, tx, &inner_ctx)
+            augment_block_with_inscriptions(block, sequence_cursor, cache_l1, &ord_tx, &inner_ctx)
                 .await?;
         }
-        augment_block_with_transfers(block, tx, &inner_ctx).await?;
+        augment_block_with_transfers(block, &ord_tx, &inner_ctx).await?;
 
         // Write data
-        ordinals_pg::insert_block(block, tx).await?;
+        ordinals_pg::insert_block(block, &ord_tx).await?;
 
         // BRC-20
         if let (Some(brc20_cache), Some(brc20_pool)) = (brc20_cache, &pg_pools.brc20) {
-            with_pg_transaction(&brc20_pool, |brc20_tx| async move {
-                index_block_and_insert_brc20_operations(
-                    block,
-                    &mut brc20_operation_map,
-                    brc20_cache,
-                    brc20_tx,
-                    &ctx,
-                )
-                .await
-            })
+            let mut brc20_client = pg_pool_client(brc20_pool).await?;
+            let brc20_tx = pg_begin(&mut brc20_client).await?;
+
+            index_block_and_insert_brc20_operations(
+                block,
+                &mut brc20_operation_map,
+                brc20_cache,
+                &brc20_tx,
+                &ctx,
+            )
             .await?;
+
+            brc20_tx
+                .commit()
+                .await
+                .map_err(|e| format!("unable to commit brc20 pg transaction: {e}"))?;
         }
 
         prometheus.metrics_block_indexed(block_height);
         prometheus.metrics_inscription_indexed(
-            ordinals_pg::get_highest_inscription_number(tx)
+            ordinals_pg::get_highest_inscription_number(&ord_tx)
                 .await?
                 .unwrap_or(0) as u64,
         );
-        Ok(())
-    })
-    .await?;
+        ord_tx
+            .commit()
+            .await
+            .map_err(|e| format!("unable to commit ordinals pg transaction: {e}"))?;
+    }
 
     try_info!(
         ctx,
@@ -291,26 +305,38 @@ pub async fn rollback_block(
         &ctx,
     );
     // Drop from postgres.
-    with_pg_transaction(&pg_pools.ordinals, |client| async move {
-        ordinals_pg::rollback_block(block_height, client).await?;
-        try_info!(
-            ctx,
-            "Rolled back inscription activity at block #{block_height}"
-        );
+    {
+        let mut ord_client = pg_pool_client(&pg_pools.ordinals).await?;
+        let ord_tx = pg_begin(&mut ord_client).await?;
+
+        ordinals_pg::rollback_block(block_height, &ord_tx).await?;
+
         // BRC-20
-        if let (true, Some(brc20_db)) = (config.meta_protocols.brc20, &pg_pools.brc20) {
-            with_pg_transaction(brc20_db, |tx| async move {
-                Ok(brc20_pg::rollback_block_operations(block_height, tx).await?)
-            })
-            .await?;
+        if let (true, Some(brc20_pool)) = (config.meta_protocols.brc20, &pg_pools.brc20) {
+            let mut brc20_client = pg_pool_client(brc20_pool).await?;
+            let brc20_tx = pg_begin(&mut brc20_client).await?;
+
+            brc20_pg::rollback_block_operations(block_height, &brc20_tx).await?;
+
+            brc20_tx
+                .commit()
+                .await
+                .map_err(|e| format!("unable to commit brc20 pg transaction: {e}"))?;
             try_info!(
                 ctx,
                 "Rolled back BRC-20 operations at block #{block_height}"
             );
         }
-        Ok(())
-    })
-    .await?;
+
+        ord_tx
+            .commit()
+            .await
+            .map_err(|e| format!("unable to commit ordinals pg transaction: {e}"))?;
+        try_info!(
+            ctx,
+            "Rolled back inscription activity at block #{block_height}"
+        );
+    }
     Ok(())
 }
 

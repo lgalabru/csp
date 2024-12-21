@@ -1,8 +1,6 @@
 pub mod types;
 pub mod utils;
 
-use std::future::Future;
-
 pub use deadpool_postgres;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod, Transaction};
 pub use tokio_postgres;
@@ -49,55 +47,19 @@ pub fn new_pg_connection_pool(config: &PgConnectionConfig) -> Result<Pool, Strin
         .map_err(|e| format!("unable to build pg connection pool: {e}"))?)
 }
 
-/// Creates a short-lived client and passes it into the given closure. Takes the connection out of the given pool, so it may or
-/// may not close once the given closure is complete.
-pub async fn with_pg_client<F, Fut, T>(pool: &Pool, f: F) -> Result<T, String>
-where
-    F: FnOnce(Object) -> Fut,
-    Fut: Future<Output = Result<T, String>>,
-{
-    let client = pool
-        .get()
+/// Returns a new pg connection client taken from a pool.
+pub async fn pg_pool_client(pool: &Pool) -> Result<Object, String> {
+    pool.get()
         .await
-        .map_err(|e| format!("unable to get pg client: {e}"))?;
-    let result = f(client).await?;
-    Ok(result)
+        .map_err(|e| format!("unable to get pg client: {e}"))
 }
 
-/// Takes a connection from the given pool, opens a transaction, and passes it into the given closure. Use this when you want to
-/// run queries within the confines of a single well defined transaction.
-pub async fn with_pg_transaction<'a, F, Fut, T>(pool: &Pool, f: F) -> Result<T, String>
-where
-    F: FnOnce(&'a Transaction<'a>) -> Fut,
-    Fut: Future<Output = Result<T, String>> + 'a,
-{
-    let mut client = pool
-        .get()
-        .await
-        .map_err(|e| format!("unable to get pg client: {e}"))?;
-    let transaction = client
+/// Returns a new pg transaction taken from an existing pool connection
+pub async fn pg_begin(client: &mut Object) -> Result<Transaction<'_>, String> {
+    client
         .transaction()
         .await
-        .map_err(|e| format!("unable to begin pg transaction: {e}"))?;
-    {
-        let transaction_ref: &'a Transaction<'a> = unsafe { std::mem::transmute(&transaction) };
-        match f(transaction_ref).await {
-            Ok(result) => {
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|e| format!("unable to commit pg transaction: {e}"))?;
-                Ok(result)
-            }
-            Err(e) => {
-                transaction
-                    .rollback()
-                    .await
-                    .map_err(|e| format!("unable to rollback pg transaction: {e}"))?;
-                Err(e)
-            }
-        }
-    }
+        .map_err(|e| format!("unable to begin pg transaction: {e}"))
 }
 
 /// Connects to postgres and returns an open client.
@@ -182,4 +144,32 @@ pub async fn pg_test_roll_back_migrations(pg_client: &mut tokio_postgres::Client
             Ok(rows) => rows,
             Err(_) => unreachable!()
         };
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{new_pg_connection_pool, pg_begin, pg_pool_client};
+
+    #[tokio::test]
+    async fn test_pg_connection_and_transaction() -> Result<(), String> {
+        let pool = new_pg_connection_pool(&crate::PgConnectionConfig {
+            dbname: "postgres".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            user: "postgres".to_string(),
+            password: Some("postgres".to_string()),
+            search_path: None,
+        })?;
+        let mut client = pg_pool_client(&pool).await?;
+        let transaction = pg_begin(&mut client).await?;
+        let row = transaction
+            .query_opt("SELECT 1 AS result", &[])
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i32 = row.get("result");
+        assert_eq!(1, count);
+        transaction.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
