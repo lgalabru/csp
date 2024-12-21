@@ -3,10 +3,10 @@ use ordhook::chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
 };
 use ordhook::config::{
-    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, PredicatesApi, PredicatesApiConfig,
-    ResourcesConfig, SnapshotConfig, SnapshotConfigDownloadUrls, StorageConfig,
-    DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE,
-    DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
+    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, ResourcesConfig, SnapshotConfig,
+    SnapshotConfigDownloadUrls, StorageConfig, DEFAULT_BITCOIND_RPC_THREADS,
+    DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE,
+    DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
 };
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -78,6 +78,7 @@ impl ConfigFile {
                 user: config_file.ordinals_db.username,
                 password: config_file.ordinals_db.password,
                 search_path: config_file.ordinals_db.search_path,
+                pool_max_size: config_file.ordinals_db.pool_max_size,
             },
             brc20_db: match config_file.brc20_db {
                 Some(brc20_db) => Some(ordhook::config::PgConnectionConfig {
@@ -87,18 +88,9 @@ impl ConfigFile {
                     user: brc20_db.username,
                     password: brc20_db.password,
                     search_path: brc20_db.search_path,
+                    pool_max_size: brc20_db.pool_max_size,
                 }),
                 None => None,
-            },
-            http_api: match config_file.http_api {
-                None => PredicatesApi::Off,
-                Some(http_api) => match http_api.disabled {
-                    Some(false) => PredicatesApi::Off,
-                    _ => PredicatesApi::On(PredicatesApiConfig {
-                        http_port: http_api.http_port.unwrap_or(DEFAULT_CONTROL_PORT),
-                        display_logs: http_api.display_logs.unwrap_or(true),
-                    }),
-                },
             },
             snapshot,
             resources: ResourcesConfig {
@@ -202,6 +194,7 @@ pub struct PostgresConfigFile {
     pub username: String,
     pub password: Option<String>,
     pub search_path: Option<String>,
+    pub pool_max_size: Option<usize>
 }
 
 #[derive(Deserialize, Debug, Clone)]

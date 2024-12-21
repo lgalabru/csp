@@ -11,7 +11,6 @@ const DEFAULT_MAINNET_BRC20_SQLITE_ARCHIVE: &str =
     "https://archive.hiro.so/mainnet/ordhook/mainnet-ordhook-brc20-latest";
 
 pub const DEFAULT_INGESTION_PORT: u16 = 20455;
-pub const DEFAULT_CONTROL_PORT: u16 = 20456;
 pub const DEFAULT_ULIMIT: usize = 2048;
 pub const DEFAULT_MEMORY_AVAILABLE: usize = 8;
 pub const DEFAULT_BITCOIND_RPC_THREADS: usize = 4;
@@ -23,7 +22,6 @@ pub struct Config {
     pub storage: StorageConfig,
     pub ordinals_db: PgConnectionConfig,
     pub brc20_db: Option<PgConnectionConfig>,
-    pub http_api: PredicatesApi,
     pub resources: ResourcesConfig,
     pub network: IndexerConfig,
     pub snapshot: SnapshotConfig,
@@ -46,18 +44,6 @@ pub struct LogConfig {
 pub struct StorageConfig {
     pub working_dir: String,
     pub observers_working_dir: String,
-}
-
-#[derive(Clone, Debug)]
-pub enum PredicatesApi {
-    Off,
-    On(PredicatesApiConfig),
-}
-
-#[derive(Clone, Debug)]
-pub struct PredicatesApiConfig {
-    pub http_port: u16,
-    pub display_logs: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -113,13 +99,6 @@ impl ResourcesConfig {
 }
 
 impl Config {
-    pub fn is_http_api_enabled(&self) -> bool {
-        match self.http_api {
-            PredicatesApi::Off => false,
-            PredicatesApi::On(_) => true,
-        }
-    }
-
     pub fn get_event_observer_config(&self) -> EventObserverConfig {
         EventObserverConfig {
             bitcoin_rpc_proxy_enabled: true,
@@ -142,13 +121,6 @@ impl Config {
         match &self.snapshot {
             SnapshotConfig::Build => false,
             SnapshotConfig::Download(_) => true,
-        }
-    }
-
-    pub fn expected_api_config(&self) -> &PredicatesApiConfig {
-        match self.http_api {
-            PredicatesApi::On(ref config) => config,
-            _ => unreachable!(),
         }
     }
 
@@ -177,9 +149,9 @@ impl Config {
                 user: "postgres".to_string(),
                 password: Some("postgres".to_string()),
                 search_path: None,
+                pool_max_size: None,
             },
             brc20_db: None,
-            http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
                 cpu_core_available: num_cpus::get(),
@@ -221,9 +193,9 @@ impl Config {
                 user: "postgres".to_string(),
                 password: Some("postgres".to_string()),
                 search_path: None,
+                pool_max_size: None,
             },
             brc20_db: None,
-            http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
                 cpu_core_available: num_cpus::get(),
@@ -265,9 +237,9 @@ impl Config {
                 user: "postgres".to_string(),
                 password: Some("postgres".to_string()),
                 search_path: None,
+                pool_max_size: None,
             },
             brc20_db: None,
-            http_api: PredicatesApi::Off,
             snapshot: SnapshotConfig::Download(SnapshotConfigDownloadUrls {
                 ordinals: DEFAULT_MAINNET_ORDINALS_SQLITE_ARCHIVE.to_string(),
                 brc20: Some(DEFAULT_MAINNET_BRC20_SQLITE_ARCHIVE.to_string()),

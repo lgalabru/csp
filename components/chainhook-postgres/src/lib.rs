@@ -16,7 +16,7 @@ pub struct PgConnectionConfig {
     pub user: String,
     pub password: Option<String>,
     pub search_path: Option<String>,
-    // pub pool_max_size: Option<usize>,
+    pub pool_max_size: Option<usize>,
 }
 
 /// Creates a Postgres connection pool based on a single database config. You can then use this pool to create ad-hoc clients and
@@ -42,8 +42,11 @@ pub fn pg_pool(config: &PgConnectionConfig) -> Result<Pool, String> {
             recycling_method: RecyclingMethod::Fast,
         },
     );
-    Ok(Pool::builder(manager)
-        .max_size(16)
+    let mut pool_builder = Pool::builder(manager);
+    if let Some(size) = config.pool_max_size {
+        pool_builder = pool_builder.max_size(size);
+    }
+    Ok(pool_builder
         .build()
         .map_err(|e| format!("unable to build pg connection pool: {e}"))?)
 }
@@ -149,7 +152,7 @@ pub async fn pg_test_roll_back_migrations(pg_client: &mut tokio_postgres::Client
 
 #[cfg(test)]
 mod test {
-    use crate::{pg_pool, pg_begin, pg_pool_client};
+    use crate::{pg_begin, pg_pool, pg_pool_client};
 
     #[tokio::test]
     async fn test_pg_connection_and_transaction() -> Result<(), String> {
@@ -160,6 +163,7 @@ mod test {
             user: "postgres".to_string(),
             password: Some("postgres".to_string()),
             search_path: None,
+            pool_max_size: None,
         })?;
         let mut client = pg_pool_client(&pool).await?;
         let transaction = pg_begin(&mut client).await?;

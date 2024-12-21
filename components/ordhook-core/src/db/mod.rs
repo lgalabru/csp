@@ -32,6 +32,7 @@ pub fn pg_test_config() -> chainhook_postgres::PgConnectionConfig {
         user: "postgres".to_string(),
         password: Some("postgres".to_string()),
         search_path: None,
+        pool_max_size: None,
     }
 }
 
