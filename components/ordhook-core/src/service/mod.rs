@@ -19,7 +19,7 @@ use crate::utils::bitcoind::bitcoind_wait_for_chain_tip;
 use crate::utils::monitoring::{start_serving_prometheus_metrics, PrometheusMonitoring};
 use crate::{try_error, try_info};
 use chainhook_postgres::deadpool_postgres::Pool;
-use chainhook_postgres::{pg_pool, pg_begin, pg_pool_client};
+use chainhook_postgres::{pg_begin, pg_pool, pg_pool_client};
 use chainhook_sdk::observer::{
     start_event_observer, BitcoinBlockDataCached, ObserverEvent, ObserverSidecar,
 };
@@ -128,26 +128,6 @@ impl Service {
             Context::empty()
         };
 
-        // Observers handling
-        // 1) update event_observer_config with observers ready to be used
-        // 2) catch-up outdated observers by dispatching replays
-        // let chain_tip = with_pg_client(&self.pg_pools.ordinals, |client| async move {
-        //     Ok(ordinals_pg::get_chain_tip_block_height(&client)
-        //         .await?
-        //         .unwrap_or(0))
-        // })
-        // .await?;
-        // let (chainhook_config, outdated_observers) =
-        //     create_and_consolidate_chainhook_config_with_predicates(
-        //         observer_specs,
-        //         chain_tip,
-        //         predicate_activity_relayer.is_some(),
-        //         &self.prometheus,
-        //         &self.config,
-        //         &self.ctx,
-        //     )?;
-        // event_observer_config.chainhook_config = Some(chainhook_config);
-
         let event_observer_config = self.config.get_event_observer_config();
         let _ = start_event_observer(
             event_observer_config,
@@ -251,7 +231,9 @@ impl Service {
             let blocks_db = open_blocks_db_with_retry(false, &self.config, &self.ctx);
             let ord_client = pg_pool_client(&self.pg_pools.ordinals).await?;
 
-            let tip = ordinals_pg::get_chain_tip_block_height(&ord_client).await?.unwrap_or(0);
+            let tip = ordinals_pg::get_chain_tip_block_height(&ord_client)
+                .await?
+                .unwrap_or(0);
             let missing_blocks = find_missing_blocks(&blocks_db, 0, tip as u32, &self.ctx);
 
             (tip, missing_blocks)
@@ -289,12 +271,12 @@ impl Service {
         if let Some((start_block, end_block)) =
             should_sync_rocks_db(&self.config, &self.pg_pools, &self.ctx).await?
         {
-            let blocks_post_processor =
-                start_block_archiving_processor(&self.config, &self.ctx, true, None);
             try_info!(
                 self.ctx,
-                "Service: Compressing blocks from #{start_block} to #{end_block}"
+                "Blocks DB is out of sync with ordinals DB, archiving blocks from #{start_block} to #{end_block}"
             );
+            let blocks_post_processor =
+                start_block_archiving_processor(&self.config, &self.ctx, true, None);
             let blocks = BlockHeights::BlockRange(start_block, end_block)
                 .get_sorted_entries()
                 .map_err(|_e| format!("Block start / end block spec invalid"))?;
@@ -327,7 +309,7 @@ impl Service {
             );
             try_info!(
                 self.ctx,
-                "Service: Indexing inscriptions from #{start_block} to #{end_block}"
+                "Indexing inscriptions from #{start_block} to #{end_block}"
             );
             let blocks = BlockHeights::BlockRange(start_block, end_block)
                 .get_sorted_entries()
@@ -344,7 +326,7 @@ impl Service {
             last_block_processed = end_block;
         }
 
-        try_info!(self.ctx, "Service: Index has reached bitcoin chain tip");
+        try_info!(self.ctx, "Index has reached bitcoin chain tip");
         Ok(())
     }
 }

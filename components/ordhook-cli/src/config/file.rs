@@ -5,8 +5,8 @@ use ordhook::chainhook_sdk::types::{
 use ordhook::config::{
     Config, IndexerConfig, LogConfig, MetaProtocolsConfig, ResourcesConfig, SnapshotConfig,
     SnapshotConfigDownloadUrls, StorageConfig, DEFAULT_BITCOIND_RPC_THREADS,
-    DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE,
-    DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
+    DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE, DEFAULT_MEMORY_AVAILABLE,
+    DEFAULT_ULIMIT,
 };
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -194,7 +194,7 @@ pub struct PostgresConfigFile {
     pub username: String,
     pub password: Option<String>,
     pub search_path: Option<String>,
-    pub pool_max_size: Option<usize>
+    pub pool_max_size: Option<usize>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
