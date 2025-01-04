@@ -3,10 +3,10 @@ use ordhook::chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
 };
 use ordhook::config::{
-    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, PredicatesApi, PredicatesApiConfig,
-    ResourcesConfig, SnapshotConfig, SnapshotConfigDownloadUrls, StorageConfig,
-    DEFAULT_BITCOIND_RPC_THREADS, DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE,
-    DEFAULT_CONTROL_PORT, DEFAULT_MEMORY_AVAILABLE, DEFAULT_ULIMIT,
+    Config, IndexerConfig, LogConfig, MetaProtocolsConfig, ResourcesConfig, SnapshotConfig,
+    SnapshotConfigDownloadUrls, StorageConfig, DEFAULT_BITCOIND_RPC_THREADS,
+    DEFAULT_BITCOIND_RPC_TIMEOUT, DEFAULT_BRC20_LRU_CACHE_SIZE, DEFAULT_MEMORY_AVAILABLE,
+    DEFAULT_ULIMIT,
 };
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -14,6 +14,8 @@ use std::io::{BufReader, Read};
 #[derive(Deserialize, Debug, Clone)]
 pub struct ConfigFile {
     pub storage: StorageConfigFile,
+    pub ordinals_db: PostgresConfigFile,
+    pub brc20_db: Option<PostgresConfigFile>,
     pub http_api: Option<PredicatesApiConfigFile>,
     pub resources: ResourcesConfigFile,
     pub network: NetworkConfigFile,
@@ -69,15 +71,26 @@ impl ConfigFile {
                     .observers_working_dir
                     .unwrap_or("observers".into()),
             },
-            http_api: match config_file.http_api {
-                None => PredicatesApi::Off,
-                Some(http_api) => match http_api.disabled {
-                    Some(false) => PredicatesApi::Off,
-                    _ => PredicatesApi::On(PredicatesApiConfig {
-                        http_port: http_api.http_port.unwrap_or(DEFAULT_CONTROL_PORT),
-                        display_logs: http_api.display_logs.unwrap_or(true),
-                    }),
-                },
+            ordinals_db: ordhook::config::PgConnectionConfig {
+                dbname: config_file.ordinals_db.database,
+                host: config_file.ordinals_db.host,
+                port: config_file.ordinals_db.port,
+                user: config_file.ordinals_db.username,
+                password: config_file.ordinals_db.password,
+                search_path: config_file.ordinals_db.search_path,
+                pool_max_size: config_file.ordinals_db.pool_max_size,
+            },
+            brc20_db: match config_file.brc20_db {
+                Some(brc20_db) => Some(ordhook::config::PgConnectionConfig {
+                    dbname: brc20_db.database,
+                    host: brc20_db.host,
+                    port: brc20_db.port,
+                    user: brc20_db.username,
+                    password: brc20_db.password,
+                    search_path: brc20_db.search_path,
+                    pool_max_size: brc20_db.pool_max_size,
+                }),
+                None => None,
             },
             snapshot,
             resources: ResourcesConfig {
@@ -171,6 +184,17 @@ impl ConfigFile {
 pub struct LogConfigFile {
     pub ordinals_internals: Option<bool>,
     pub chainhook_internals: Option<bool>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PostgresConfigFile {
+    pub database: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+    pub search_path: Option<String>,
+    pub pool_max_size: Option<usize>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

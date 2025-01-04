@@ -4,6 +4,7 @@ pub mod protocol;
 #[cfg(test)]
 pub mod test_builders;
 
+use chainhook_postgres::pg_pool_client;
 use dashmap::DashMap;
 use fxhash::{FxBuildHasher, FxHasher};
 use std::hash::BuildHasherDefault;
@@ -19,9 +20,9 @@ use crate::{
             open_blocks_db_with_retry,
         },
         cursor::TransactionBytesCursor,
-        initialize_sqlite_dbs,
-        ordinals::{find_latest_inscription_block_height, open_ordinals_db},
+        ordinals_pg,
     },
+    service::PgConnectionPools,
     utils::bitcoind::bitcoind_get_block_height,
 };
 
@@ -116,11 +117,15 @@ pub fn compute_next_satpoint_data(
     SatPosition::Output((selected_output_index, relative_offset_in_selected_output))
 }
 
-pub fn should_sync_rocks_db(config: &Config, ctx: &Context) -> Result<Option<(u64, u64)>, String> {
+pub async fn should_sync_rocks_db(
+    config: &Config,
+    pg_pools: &PgConnectionPools,
+    ctx: &Context,
+) -> Result<Option<(u64, u64)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
-    let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), &ctx)?;
     let last_compressed_block = find_last_block_inserted(&blocks_db) as u64;
-    let last_indexed_block = match find_latest_inscription_block_height(&inscriptions_db_conn, ctx)?
+    let ord_client = pg_pool_client(&pg_pools.ordinals).await?;
+    let last_indexed_block = match ordinals_pg::get_chain_tip_block_height(&ord_client).await?
     {
         Some(last_indexed_block) => last_indexed_block,
         None => 0,
@@ -134,20 +139,17 @@ pub fn should_sync_rocks_db(config: &Config, ctx: &Context) -> Result<Option<(u6
     Ok(res)
 }
 
-pub fn should_sync_ordhook_db(
+pub async fn should_sync_ordinals_db(
     config: &Config,
+    pg_pools: &PgConnectionPools,
     ctx: &Context,
 ) -> Result<Option<(u64, u64, usize)>, String> {
     let blocks_db = open_blocks_db_with_retry(true, &config, &ctx);
     let mut start_block = find_last_block_inserted(&blocks_db) as u64;
 
-    if start_block == 0 {
-        let _ = initialize_sqlite_dbs(config, ctx);
-    }
-
-    let inscriptions_db_conn = open_ordinals_db(&config.expected_cache_path(), &ctx)?;
-
-    match find_latest_inscription_block_height(&inscriptions_db_conn, ctx)? {
+    let ord_client = pg_pool_client(&pg_pools.ordinals).await?;
+    match ordinals_pg::get_chain_tip_block_height(&ord_client).await?
+    {
         Some(height) => {
             if find_pinned_block_bytes_at_block_height(height as u32, 3, &blocks_db, &ctx).is_none()
             {

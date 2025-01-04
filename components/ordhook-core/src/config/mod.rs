@@ -1,3 +1,4 @@
+pub use chainhook_postgres::PgConnectionConfig;
 use chainhook_sdk::observer::EventObserverConfig;
 use chainhook_sdk::types::{
     BitcoinBlockSignaling, BitcoinNetwork, StacksNetwork, StacksNodeConfig,
@@ -10,7 +11,6 @@ const DEFAULT_MAINNET_BRC20_SQLITE_ARCHIVE: &str =
     "https://archive.hiro.so/mainnet/ordhook/mainnet-ordhook-brc20-latest";
 
 pub const DEFAULT_INGESTION_PORT: u16 = 20455;
-pub const DEFAULT_CONTROL_PORT: u16 = 20456;
 pub const DEFAULT_ULIMIT: usize = 2048;
 pub const DEFAULT_MEMORY_AVAILABLE: usize = 8;
 pub const DEFAULT_BITCOIND_RPC_THREADS: usize = 4;
@@ -20,7 +20,8 @@ pub const DEFAULT_BRC20_LRU_CACHE_SIZE: usize = 50_000;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub storage: StorageConfig,
-    pub http_api: PredicatesApi,
+    pub ordinals_db: PgConnectionConfig,
+    pub brc20_db: Option<PgConnectionConfig>,
     pub resources: ResourcesConfig,
     pub network: IndexerConfig,
     pub snapshot: SnapshotConfig,
@@ -43,18 +44,6 @@ pub struct LogConfig {
 pub struct StorageConfig {
     pub working_dir: String,
     pub observers_working_dir: String,
-}
-
-#[derive(Clone, Debug)]
-pub enum PredicatesApi {
-    Off,
-    On(PredicatesApiConfig),
-}
-
-#[derive(Clone, Debug)]
-pub struct PredicatesApiConfig {
-    pub http_port: u16,
-    pub display_logs: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -110,13 +99,6 @@ impl ResourcesConfig {
 }
 
 impl Config {
-    pub fn is_http_api_enabled(&self) -> bool {
-        match self.http_api {
-            PredicatesApi::Off => false,
-            PredicatesApi::On(_) => true,
-        }
-    }
-
     pub fn get_event_observer_config(&self) -> EventObserverConfig {
         EventObserverConfig {
             bitcoin_rpc_proxy_enabled: true,
@@ -142,13 +124,6 @@ impl Config {
         }
     }
 
-    pub fn expected_api_config(&self) -> &PredicatesApiConfig {
-        match self.http_api {
-            PredicatesApi::On(ref config) => config,
-            _ => unreachable!(),
-        }
-    }
-
     pub fn expected_cache_path(&self) -> PathBuf {
         let mut destination_path = PathBuf::new();
         destination_path.push(&self.storage.working_dir);
@@ -167,7 +142,16 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
-            http_api: PredicatesApi::Off,
+            ordinals_db: PgConnectionConfig {
+                dbname: "ordinals".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                user: "postgres".to_string(),
+                password: Some("postgres".to_string()),
+                search_path: None,
+                pool_max_size: None,
+            },
+            brc20_db: None,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
                 cpu_core_available: num_cpus::get(),
@@ -202,7 +186,16 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
-            http_api: PredicatesApi::Off,
+            ordinals_db: PgConnectionConfig {
+                dbname: "ordinals".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                user: "postgres".to_string(),
+                password: Some("postgres".to_string()),
+                search_path: None,
+                pool_max_size: None,
+            },
+            brc20_db: None,
             snapshot: SnapshotConfig::Build,
             resources: ResourcesConfig {
                 cpu_core_available: num_cpus::get(),
@@ -237,7 +230,16 @@ impl Config {
                 working_dir: default_cache_path(),
                 observers_working_dir: default_observers_cache_path(),
             },
-            http_api: PredicatesApi::Off,
+            ordinals_db: PgConnectionConfig {
+                dbname: "ordinals".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                user: "postgres".to_string(),
+                password: Some("postgres".to_string()),
+                search_path: None,
+                pool_max_size: None,
+            },
+            brc20_db: None,
             snapshot: SnapshotConfig::Download(SnapshotConfigDownloadUrls {
                 ordinals: DEFAULT_MAINNET_ORDINALS_SQLITE_ARCHIVE.to_string(),
                 brc20: Some(DEFAULT_MAINNET_BRC20_SQLITE_ARCHIVE.to_string()),
