@@ -151,7 +151,7 @@ mod test {
         core::test_builders::{TestBlockBuilder, TestTransactionBuilder},
         db::{
             ordinals_pg::{self, insert_block},
-            pg_test_clear_db, pg_test_connection, pg_test_connection_pool,
+            pg_reset_db, pg_test_connection, pg_test_connection_pool,
         },
     };
 
@@ -200,7 +200,7 @@ mod test {
 
             (next.classic, next.jubilee)
         };
-        pg_test_clear_db(&mut pg_client).await;
+        pg_reset_db(&mut pg_client).await;
         Ok(result)
     }
 }
