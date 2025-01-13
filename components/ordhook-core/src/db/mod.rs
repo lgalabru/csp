@@ -7,7 +7,7 @@ use chainhook_postgres::pg_connect_with_retry;
 
 use chainhook_sdk::utils::Context;
 
-use crate::{config::Config, core::meta_protocols::brc20::brc20_pg, try_info};
+use crate::{config::Config, core::meta_protocols::brc20::brc20_pg, try_info, try_warn};
 
 pub async fn migrate_dbs(config: &Config, ctx: &Context) -> Result<(), String> {
     {
@@ -20,6 +20,46 @@ pub async fn migrate_dbs(config: &Config, ctx: &Context) -> Result<(), String> {
         let mut pg_client = pg_connect_with_retry(&brc20_db).await;
         brc20_pg::migrate(&mut pg_client).await?;
     }
+    Ok(())
+}
+
+pub async fn reset_dbs(config: &Config, ctx: &Context) -> Result<(), String> {
+    {
+        try_warn!(ctx, "Resetting ordinals DB");
+        let mut pg_client = pg_connect_with_retry(&config.ordinals_db).await;
+        pg_reset_db(&mut pg_client).await?;
+    }
+    if let (Some(brc20_db), true) = (&config.brc20_db, config.meta_protocols.brc20) {
+        try_warn!(ctx, "Resetting brc20 DB");
+        let mut pg_client = pg_connect_with_retry(&brc20_db).await;
+        pg_reset_db(&mut pg_client).await?;
+    }
+    Ok(())
+}
+
+pub async fn pg_reset_db(
+    pg_client: &mut chainhook_postgres::tokio_postgres::Client,
+) -> Result<(), String> {
+    pg_client
+        .batch_execute(
+            "
+            DO $$ DECLARE
+                r RECORD;
+            BEGIN
+                FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP
+                    EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
+                END LOOP;
+            END $$;
+            DO $$ DECLARE
+                r RECORD;
+            BEGIN
+                FOR r IN (SELECT typname FROM pg_type WHERE typtype = 'e' AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())) LOOP
+                    EXECUTE 'DROP TYPE IF EXISTS ' || quote_ident(r.typname) || ' CASCADE';
+                END LOOP;
+            END $$;",
+        )
+        .await
+        .map_err(|e| format!("unable to reset db: {e}"))?;
     Ok(())
 }
 
@@ -43,39 +83,9 @@ pub fn pg_test_connection_pool() -> chainhook_postgres::deadpool_postgres::Pool 
 
 #[cfg(test)]
 pub async fn pg_test_connection() -> chainhook_postgres::tokio_postgres::Client {
-    chainhook_postgres::pg_connect(&pg_test_config()).await.unwrap()
-}
-
-#[cfg(test)]
-pub async fn pg_test_clear_db(pg_client: &mut chainhook_postgres::tokio_postgres::Client) {
-    match pg_client
-        .batch_execute(
-            "
-            DO $$ DECLARE
-                r RECORD;
-            BEGIN
-                FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP
-                    EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
-                END LOOP;
-            END $$;
-            DO $$ DECLARE
-                r RECORD;
-            BEGIN
-                FOR r IN (SELECT typname FROM pg_type WHERE typtype = 'e' AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())) LOOP
-                    EXECUTE 'DROP TYPE IF EXISTS ' || quote_ident(r.typname) || ' CASCADE';
-                END LOOP;
-            END $$;",
-        )
-        .await {
-            Ok(rows) => rows,
-            Err(e) => {
-                println!(
-                    "error rolling back test migrations: {}",
-                    e.to_string()
-                );
-                std::process::exit(1);
-            }
-        };
+    chainhook_postgres::pg_connect(&pg_test_config())
+        .await
+        .unwrap()
 }
 
 /// Drops DB files in a test environment.

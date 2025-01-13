@@ -19,7 +19,7 @@ use ordhook::db::blocks::{
     open_blocks_db_with_retry, open_readonly_blocks_db,
 };
 use ordhook::db::cursor::BlockBytesCursor;
-use ordhook::db::migrate_dbs;
+use ordhook::db::{migrate_dbs, reset_dbs};
 use ordhook::service::Service;
 use ordhook::try_info;
 use std::collections::HashSet;
@@ -43,9 +43,29 @@ enum Command {
     /// Stream Bitcoin blocks and index ordinals inscriptions and transfers
     #[clap(subcommand)]
     Service(ServiceCommand),
-    /// Perform maintenance operations on local databases
+    /// Perform maintenance operations on local index
     #[clap(subcommand)]
-    Db(OrdhookDbCommand),
+    Index(IndexCommand),
+    /// Database operations
+    #[clap(subcommand)]
+    Database(DatabaseCommand),
+}
+
+#[derive(Subcommand, PartialEq, Clone, Debug)]
+enum DatabaseCommand {
+    /// Migrates database
+    #[clap(name = "migrate", bin_name = "migrate")]
+    Migrate(DatabaseMigrateCommand),
+    /// Resets database to an empty state
+    #[clap(name = "reset", bin_name = "reset")]
+    Reset(DatabaseMigrateCommand),
+}
+
+#[derive(Parser, PartialEq, Clone, Debug)]
+struct DatabaseMigrateCommand {
+    /// Load config file path
+    #[clap(long = "config-path")]
+    pub config_path: Option<String>,
 }
 
 #[derive(Subcommand, PartialEq, Clone, Debug)]
@@ -184,7 +204,7 @@ struct StartCommand {
 }
 
 #[derive(Subcommand, PartialEq, Clone, Debug)]
-enum OrdhookDbCommand {
+enum IndexCommand {
     /// Initialize a new ordhook db
     #[clap(name = "new", bin_name = "new")]
     New(SyncOrdhookDbCommand),
@@ -324,18 +344,18 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 println!("Created file Ordhook.toml");
             }
         },
-        Command::Db(OrdhookDbCommand::New(cmd)) => {
+        Command::Index(IndexCommand::New(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             migrate_dbs(&config, ctx).await?;
             open_blocks_db_with_retry(true, &config, ctx);
         }
-        Command::Db(OrdhookDbCommand::Sync(cmd)) => {
+        Command::Index(IndexCommand::Sync(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             migrate_dbs(&config, ctx).await?;
             let service = Service::new(&config, ctx);
             service.catch_up_to_bitcoin_chain_tip().await?;
         }
-        Command::Db(OrdhookDbCommand::Repair(subcmd)) => match subcmd {
+        Command::Index(IndexCommand::Repair(subcmd)) => match subcmd {
             RepairCommand::Blocks(cmd) => {
                 let mut config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
                 if let Some(network_threads) = cmd.network_threads {
@@ -369,7 +389,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 }
             }
         },
-        Command::Db(OrdhookDbCommand::Check(cmd)) => {
+        Command::Index(IndexCommand::Check(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
             {
                 let blocks_db = open_readonly_blocks_db(&config, ctx)?;
@@ -379,7 +399,7 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
                 println!("{:?}", missing_blocks);
             }
         }
-        Command::Db(OrdhookDbCommand::Drop(cmd)) => {
+        Command::Index(IndexCommand::Drop(cmd)) => {
             let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
 
             let service = Service::new(&config, ctx);
@@ -400,6 +420,22 @@ async fn handle_command(opts: Opts, ctx: &Context) -> Result<(), String> {
             let block_heights: Vec<u64> = ((chain_tip - cmd.blocks as u64)..=chain_tip).collect();
             service.rollback(&block_heights).await?;
             println!("{} blocks dropped", cmd.blocks);
+        }
+        Command::Database(DatabaseCommand::Migrate(cmd)) => {
+            let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
+            migrate_dbs(&config, ctx).await?;
+        }
+        Command::Database(DatabaseCommand::Reset(cmd)) => {
+            let config = ConfigFile::default(false, false, false, &cmd.config_path, &None)?;
+            println!(
+                "WARNING: This operation will delete ALL index data and cannot be undone. Confirm? [Y/n]"
+            );
+            let mut buffer = String::new();
+            std::io::stdin().read_line(&mut buffer).unwrap();
+            if buffer.to_lowercase().starts_with('n') {
+                return Err("Aborted".to_string());
+            }
+            reset_dbs(&config, ctx).await?;
         }
     }
     Ok(())
