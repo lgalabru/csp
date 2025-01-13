@@ -990,7 +990,7 @@ mod test {
                 self, get_chain_tip_block_height, get_inscriptions_at_block, insert_block,
                 rollback_block,
             },
-            pg_test_clear_db, pg_test_connection, pg_test_connection_pool,
+            pg_reset_db, pg_test_connection, pg_test_connection_pool,
         },
     };
 
@@ -1401,7 +1401,7 @@ mod test {
                 assert_eq!(Some(799999), get_chain_tip_block_height(&client).await?);
             }
         }
-        pg_test_clear_db(&mut pg_client).await;
+        pg_reset_db(&mut pg_client).await;
         Ok(())
     }
 }

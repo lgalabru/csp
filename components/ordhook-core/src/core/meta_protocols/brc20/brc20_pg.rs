@@ -562,7 +562,7 @@ mod test {
                 VerifiedBrc20BalanceData, VerifiedBrc20TokenDeployData, VerifiedBrc20TransferData,
             },
         },
-        db::{pg_test_clear_db, pg_test_connection, pg_test_connection_pool},
+        db::{pg_reset_db, pg_test_connection, pg_test_connection_pool},
     };
 
     async fn get_counts_by_operation<T: GenericClient>(client: &T) -> (i32, i32, i32, i32) {
@@ -1000,7 +1000,7 @@ mod test {
                 );
             }
         }
-        pg_test_clear_db(&mut pg_client).await;
+        pg_reset_db(&mut pg_client).await;
         Ok(())
     }
 }
