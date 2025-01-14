@@ -1,0 +1,53 @@
+{
+  "name": "@hirosystems/ordinals-api-client",
+  "version": "1.0.0",
+  "description": "Client for @hirosystems/ordinals-api",
+  "author": "Hiro Systems PBC <engineering@hiro.so> (https://hiro.so)",
+  "keywords": [
+    "fetch",
+    "typescript",
+    "swagger-client",
+    "@hirosystems/ordinals-api-client"
+  ],
+  "license": "GPL-3.0",
+  "main": "./dist/index.js",
+  "typings": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "api.ts",
+    "configuration.ts",
+    "custom.d.ts",
+    "index.ts"
+  ],
+  "scripts": {
+    "build": "tsc --outDir dist/",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "isomorphic-fetch": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^25.2.1",
+    "@types/node": "^13.13.0",
+    "@types/babel__core": "7.1.18",
+    "@types/babel__traverse": "7.14.2",
+    "jest": "^25.4.0",
+    "ts-jest": "^25.4.0",
+    "typescript": "^3.8.3"
+  },
+  "jest": {
+    "transform": {
+      "^.+\\.tsx?$": "ts-jest"
+    },
+    "testRegex": "(/__tests__/.*|(\\.|/)(test|spec))\\.tsx?$",
+    "moduleFileExtensions": [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "json",
+      "node"
+    ]
+  }
+}

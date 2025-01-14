@@ -1,0 +1,6 @@
+{
+  "supportsES6": false,
+  "npmName": "@hirosystems/ordinals-api-client",
+  "npmVersion": "1.0.0",
+  "modelPropertyNaming": "original"
+}
