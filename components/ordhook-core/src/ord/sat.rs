@@ -1,5 +1,7 @@
 use std::ops::{Add, AddAssign};
 
+use degree::Degree;
+
 use super::{epoch::Epoch, height::Height, *};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Ord, PartialOrd, Deserialize, Serialize)]
@@ -9,6 +11,10 @@ pub struct Sat(pub u64);
 impl Sat {
     pub(crate) const LAST: Self = Self(Self::SUPPLY - 1);
     pub(crate) const SUPPLY: u64 = 2099999997690000;
+
+    pub fn degree(self) -> Degree {
+        self.into()
+    }
 
     pub(crate) fn n(self) -> u64 {
         self.0
