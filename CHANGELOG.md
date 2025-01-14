@@ -1,3 +1,14 @@
+## [3.0.0-beta.3](https://github.com/hirosystems/ordhook/compare/v3.0.0-beta.2...v3.0.0-beta.3) (2025-01-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* store inscription data in postgres instead of sqlite (#375)
+
+### Code Refactoring
+
+* store inscription data in postgres instead of sqlite ([#375](https://github.com/hirosystems/ordhook/issues/375)) ([4afb201](https://github.com/hirosystems/ordhook/commit/4afb2010068770078c7d9fd2ab37533352379c15))
+
 ## [3.0.0-beta.2](https://github.com/hirosystems/ordhook/compare/v3.0.0-beta.1...v3.0.0-beta.2) (2024-09-24)
 
 
